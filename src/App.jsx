@@ -1,0 +1,901 @@
+import React, { useState, useEffect, useMemo, useCallback } from "react";
+import { supabase } from "./supabaseClient";
+import {
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid,
+} from "recharts";
+import {
+  Plus, Trash2, ShoppingCart, CalendarDays, TrendingUp, Package,
+  ChevronLeft, ChevronRight, X, Coffee, Pencil, Check, Search, Clock, PlayCircle, LogOut,
+} from "lucide-react";
+
+/* ---------- paleta / tokens ---------- */
+const C = {
+  bg: "#16110D",
+  panel: "#221A14",
+  panelLight: "#2B2119",
+  paper: "#F4EEDD",
+  paperDim: "#E9E1CB",
+  ink: "#2B2119",
+  inkDim: "#6B5E4C",
+  vfd: "#F0A85A",
+  vfdDim: "#8A5A22",
+  gold: "#D9A441",
+  danger: "#B5453D",
+};
+
+const METHODS = [
+  { id: "efectivo", label: "Efectivo", color: "#D9A441" },
+  { id: "nequi", label: "Nequi", color: "#C9714F" },
+  { id: "daviplata", label: "Daviplata", color: "#9E5540" },
+  { id: "tarjeta", label: "Tarjeta", color: "#8A7A4B" },
+  { id: "transferencia", label: "Transferencia", color: "#B8863B" },
+];
+const methodColor = (id) => METHODS.find((m) => m.id === id)?.color || "#999";
+const methodLabel = (id) => METHODS.find((m) => m.id === id)?.label || id;
+
+const fmt = (n) =>
+  new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(n || 0);
+
+const normalize = (s) =>
+  (s || "").toString().normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+
+const toISO = (d) => {
+  const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, "0"), day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+const parseISO = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
+const weekStartOf = (d) => {
+  const day = d.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  const mon = new Date(d);
+  mon.setDate(d.getDate() + diff);
+  mon.setHours(0, 0, 0, 0);
+  return mon;
+};
+const addDays = (d, n) => { const c = new Date(d); c.setDate(c.getDate() + n); return c; };
+const DIAS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
+const MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+
+/* ---------- pantalla estilo VFD ---------- */
+function VFD({ label, value, small }) {
+  return (
+    <div
+      className="rounded-md px-3 py-2 flex flex-col items-end"
+      style={{
+        background: "repeating-linear-gradient(180deg,#0B0E0D,#0B0E0D 2px,#0E1211 2px,#0E1211 4px)",
+        border: "1px solid #05100D",
+        boxShadow: "inset 0 2px 6px rgba(0,0,0,0.6)",
+      }}
+    >
+      <span className="text-[10px] uppercase tracking-widest mb-1" style={{ color: C.vfdDim, fontFamily: "Manrope, sans-serif" }}>
+        {label}
+      </span>
+      <span
+        className={small ? "text-lg" : "text-2xl"}
+        style={{
+          color: C.vfd, fontFamily: "'JetBrains Mono', monospace", fontWeight: 700,
+          letterSpacing: "0.03em", textShadow: `0 0 8px ${C.vfd}99, 0 0 2px ${C.vfd}`,
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        {fmt(value)}
+      </span>
+    </div>
+  );
+}
+
+function KeyBtn({ active, onClick, children, style }) {
+  return (
+    <button
+      onClick={onClick}
+      className="transition-transform active:scale-95"
+      style={{
+        fontFamily: "Manrope, sans-serif", fontWeight: 700, borderRadius: 6,
+        border: `1px solid ${active ? C.gold : "#3A2E22"}`,
+        background: active ? C.gold : C.panelLight,
+        color: active ? "#241B0E" : C.paper,
+        boxShadow: active ? "inset 0 1px 0 rgba(255,255,255,0.25)" : "inset 0 -2px 0 rgba(0,0,0,0.35)",
+        ...style,
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function SectionLabel({ children }) {
+  return (
+    <span className="text-xs uppercase tracking-widest" style={{ color: C.gold, fontFamily: "Manrope, sans-serif", fontWeight: 700 }}>
+      {children}
+    </span>
+  );
+}
+
+/* ================= APP RAÍZ: maneja sesión ================= */
+export default function CajaRoot() {
+  const [session, setSession] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setAuthLoading(false);
+    });
+    const { data } = supabase.auth.onAuthStateChange((_event, sess) => setSession(sess));
+    return () => data.subscription.unsubscribe();
+  }, []);
+
+  if (authLoading) {
+    return (
+      <div style={{ background: C.bg, minHeight: "100vh" }} className="flex items-center justify-center">
+        <span style={{ color: C.vfd, fontFamily: "'JetBrains Mono', monospace" }}>Cargando…</span>
+      </div>
+    );
+  }
+
+  if (!session) return <LoginScreen />;
+
+  return <CajaApp session={session} />;
+}
+
+/* ================= LOGIN ================= */
+function LoginScreen() {
+  const [mode, setMode] = useState("signin");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setMsg(""); setBusy(true);
+    if (mode === "signup") {
+      const { error } = await supabase.auth.signUp({ email, password });
+      setBusy(false);
+      setMsg(error ? error.message : "Cuenta creada. Si tu proyecto pide confirmación, revisa tu correo y luego inicia sesión.");
+      if (!error) setMode("signin");
+    } else {
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      setBusy(false);
+      if (error) setMsg(error.message);
+    }
+  };
+
+  return (
+    <div style={{ background: C.bg, minHeight: "100vh", fontFamily: "Manrope, sans-serif" }} className="flex items-center justify-center px-5">
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Manrope:wght@400;600;700;800&display=swap');`}</style>
+      <div className="w-full max-w-sm">
+        <div className="flex items-center gap-2 justify-center mb-6">
+          <Coffee size={22} color={C.gold} />
+          <span style={{ color: C.paper, fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, letterSpacing: "0.06em" }} className="text-lg">
+            NeoMarketing
+          </span>
+        </div>
+        <form onSubmit={submit} className="flex flex-col gap-3">
+          <input type="email" required placeholder="Correo" value={email} onChange={(e) => setEmail(e.target.value)}
+            className="px-3 py-2 text-sm rounded" style={{ background: C.paper, color: C.ink }} />
+          <input type="password" required placeholder="Contraseña" value={password} onChange={(e) => setPassword(e.target.value)}
+            className="px-3 py-2 text-sm rounded" style={{ background: C.paper, color: C.ink }} />
+          <button type="submit" disabled={busy} className="py-3 rounded-lg font-bold" style={{ background: C.vfd, color: "#0B1F1B" }}>
+            {mode === "signup" ? "Crear cuenta" : "Iniciar sesión"}
+          </button>
+        </form>
+        {msg && <p className="text-xs mt-3 text-center" style={{ color: C.gold }}>{msg}</p>}
+        <button
+          onClick={() => { setMode(mode === "signin" ? "signup" : "signin"); setMsg(""); }}
+          className="text-xs mt-4 w-full text-center underline"
+          style={{ color: C.inkDim }}
+        >
+          {mode === "signin" ? "¿No tienes cuenta? Regístrate" : "¿Ya tienes cuenta? Inicia sesión"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ================= APP PRINCIPAL (con sesión activa) ================= */
+function CajaApp({ session }) {
+  const userId = session.user.id;
+
+  const [products, setProducts] = useState([]);
+  const [tables, setTables] = useState([]);
+  const [sales, setSales] = useState([]);
+  const [pending, setPending] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [tab, setTab] = useState("vender");
+
+  const loadAll = useCallback(async () => {
+  try {
+    // Quitamos temporalmente el .order("created_at") para ver si es el causante
+    const [p, t, s, pe] = await Promise.all([
+      supabase.from("products").select("*").eq("user_id", userId),
+      supabase.from("tables_config").select("*").eq("user_id", userId),
+      supabase.from("sales").select("*").eq("user_id", userId),
+      supabase.from("pending_sales").select("*").eq("user_id", userId),
+    ]);
+    
+    // Verificamos si hubo error en alguna consulta
+    if (p.error) throw p.error;
+    if (t.error) throw t.error;
+    if (s.error) throw s.error;
+    if (pe.error) throw pe.error;
+
+    setProducts((p.data || []).map((r) => ({ id: r.id, name: r.name, price: Number(r.price) })));
+    setTables((t.data || []).map((r) => ({ id: r.id, name: r.name })));
+    setSales((s.data || []).map((r) => ({
+      id: r.id,
+      date: r.date,
+      time: r.time,
+      items: r.items,
+      total: Number(r.total),
+      method: r.method,
+      tableId: r.table_id,
+      tableName: r.table_name,
+      cashReceived: r.cash_received != null ? Number(r.cash_received) : null,
+      change: r.change != null ? Number(r.change) : null,
+    })));
+    setPending((pe.data || []).map((r) => ({
+      id: r.id,
+      tableId: r.table_id,
+      tableName: r.table_name,
+      cart: r.cart,
+      method: r.method,
+      createdAt: new Date(r.created_at).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" }),
+    })));
+    
+    setError("");
+  } catch (e) {
+    console.error("Error detallado:", e); // Esto mostrará el error real en la consola
+    setError("No se pudieron cargar los datos.");
+  } finally {
+    setLoading(false);
+  }
+}, [userId]); // Asegúrate de incluir userId aquí
+
+  useEffect(() => { loadAll(); }, [loadAll]);
+
+  /* ---------- productos ---------- */
+  const addProduct = async (name, price) => {
+    if (!name.trim() || !price) return;
+    const { error: e } = await supabase.from("products").insert({ user_id: userId, name: name.trim(), price: Number(price) });
+    if (e) setError("No se guardó el producto."); else loadAll();
+  };
+  const editProduct = async (id, name, price) => {
+    const { error: e } = await supabase.from("products").update({ name, price: Number(price) }).eq("id", id);
+    if (e) setError("No se guardó el cambio."); else loadAll();
+  };
+  const deleteProduct = async (id) => {
+    const { error: e } = await supabase.from("products").delete().eq("id", id);
+    if (e) setError("No se pudo eliminar el producto."); else loadAll();
+  };
+
+  /* ---------- mesas ---------- */
+  const addTable = async (name) => {
+    if (!name.trim()) return;
+    const { error: e } = await supabase.from("tables_config").insert({ user_id: userId, name: name.trim() });
+    if (e) setError("No se guardó la mesa."); else loadAll();
+  };
+  const editTable = async (id, name) => {
+    if (!name.trim()) return;
+    const { error: e } = await supabase.from("tables_config").update({ name: name.trim() }).eq("id", id);
+    if (e) setError("No se guardó el cambio."); else loadAll();
+  };
+  const deleteTable = async (id) => {
+    const { error: e } = await supabase.from("tables_config").delete().eq("id", id);
+    if (e) setError("No se pudo eliminar la mesa."); else loadAll();
+    if (selectedTable === id) setSelectedTable(null);
+  };
+
+  /* ---------- venta activa (solo local hasta registrar/pausar) ---------- */
+  const [cart, setCart] = useState([]);
+  const [method, setMethod] = useState(null);
+  const [selectedTable, setSelectedTable] = useState(null);
+  const [customName, setCustomName] = useState("");
+  const [customPrice, setCustomPrice] = useState("");
+  const [cashReceived, setCashReceived] = useState("");
+  const [saleMsg, setSaleMsg] = useState("");
+
+  const addToCart = (item) => {
+    setCart((prev) => {
+      const idx = prev.findIndex((i) => i.id === item.id);
+      if (idx > -1) { const c = [...prev]; c[idx] = { ...c[idx], qty: c[idx].qty + 1 }; return c; }
+      return [...prev, { ...item, qty: 1 }];
+    });
+  };
+  const decFromCart = (id) => setCart((prev) => prev.flatMap((i) => (i.id === id ? (i.qty > 1 ? [{ ...i, qty: i.qty - 1 }] : []) : [i])));
+  const removeFromCart = (id) => setCart((prev) => prev.filter((i) => i.id !== id));
+  const cartTotal = cart.reduce((s, i) => s + i.price * i.qty, 0);
+
+  const registerSale = async () => {
+    if (cart.length === 0) { setSaleMsg("Agrega al menos un producto."); return; }
+    if (!method) { setSaleMsg("Selecciona cómo pagaron."); return; }
+    const now = new Date();
+    const tableObj = tables.find((t) => t.id === selectedTable);
+    const received = cashReceived !== "" ? Number(cashReceived) : null;
+    const changeDue = received !== null ? received - cartTotal : null;
+    const { error: e } = await supabase.from("sales").insert({
+      user_id: userId,
+      date: toISO(now),
+      time: now.toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" }),
+      items: cart.map(({ id, name, price, qty }) => ({ id, name, price, qty })),
+      total: cartTotal,
+      method,
+      table_id: selectedTable || null,
+      table_name: tableObj ? tableObj.name : null,
+      cash_received: received,
+      change: changeDue,
+    });
+    if (e) { setSaleMsg("No se pudo registrar la venta."); return; }
+    setCart([]); setMethod(null); setSelectedTable(null); setCashReceived("");
+    setSaleMsg("Venta registrada ✓");
+    setTimeout(() => setSaleMsg(""), 2000);
+    loadAll();
+  };
+
+  const deleteSale = async (id) => {
+    const { error: e } = await supabase.from("sales").delete().eq("id", id);
+    if (!e) loadAll();
+  };
+
+  /* ---------- pausar / reanudar ---------- */
+  const pauseSale = async () => {
+    if (cart.length === 0) { setSaleMsg("Agrega al menos un producto para pausar."); return; }
+    const tableObj = tables.find((t) => t.id === selectedTable);
+    const { error: e } = await supabase.from("pending_sales").insert({
+      user_id: userId,
+      table_id: selectedTable || null,
+      table_name: tableObj ? tableObj.name : null,
+      cart,
+      method,
+    });
+    if (e) { setSaleMsg("No se pudo pausar la venta."); return; }
+    setCart([]); setMethod(null); setSelectedTable(null); setCashReceived("");
+    setSaleMsg("Venta pausada ✓");
+    setTimeout(() => setSaleMsg(""), 2000);
+    loadAll();
+  };
+
+  const resumePending = async (id) => {
+    const entry = pending.find((p) => p.id === id);
+    if (!entry) return;
+    if (cart.length > 0 && !window.confirm("Esto reemplazará la cuenta actual en Vender. ¿Continuar?")) return;
+    setCart(entry.cart);
+    setMethod(entry.method);
+    setSelectedTable(entry.tableId);
+    setCashReceived("");
+    const { error: e } = await supabase.from("pending_sales").delete().eq("id", id);
+    if (!e) loadAll();
+    setTab("vender");
+  };
+
+  const deletePending = async (id) => {
+    const { error: e } = await supabase.from("pending_sales").delete().eq("id", id);
+    if (!e) loadAll();
+  };
+
+  /* ---------- caja del día ---------- */
+  const [selDate, setSelDate] = useState(toISO(new Date()));
+  const daySales = useMemo(() => sales.filter((s) => s.date === selDate), [sales, selDate]);
+  const dayByMethod = useMemo(() => {
+    const m = {}; METHODS.forEach((mm) => (m[mm.id] = 0));
+    daySales.forEach((s) => (m[s.method] = (m[s.method] || 0) + s.total));
+    return m;
+  }, [daySales]);
+  const dayTotal = daySales.reduce((s, x) => s + x.total, 0);
+
+  /* ---------- progreso semana / mes ---------- */
+  const [progView, setProgView] = useState("semana");
+  const [weekStart, setWeekStart] = useState(weekStartOf(new Date()));
+  const weekDays = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
+  const weekChart = useMemo(
+    () => weekDays.map((d, i) => {
+      const iso = toISO(d);
+      const total = sales.filter((s) => s.date === iso).reduce((s, x) => s + x.total, 0);
+      return { label: DIAS[i], total, iso };
+    }), [weekDays, sales]
+  );
+  const weekTotal = weekChart.reduce((s, d) => s + d.total, 0);
+  const weekByMethod = useMemo(() => {
+    const m = {}; METHODS.forEach((mm) => (m[mm.id] = 0));
+    sales.filter((s) => weekChart.some((d) => d.iso === s.date)).forEach((s) => (m[s.method] = (m[s.method] || 0) + s.total));
+    return m;
+  }, [sales, weekChart]);
+
+  const [monthCursor, setMonthCursor] = useState({ y: new Date().getFullYear(), m: new Date().getMonth() });
+  const monthWeeks = useMemo(() => {
+    const lastDay = new Date(monthCursor.y, monthCursor.m + 1, 0).getDate();
+    const weeks = [];
+    for (let start = 1; start <= lastDay; start += 7) {
+      const end = Math.min(start + 6, lastDay);
+      weeks.push({ label: `Sem ${weeks.length + 1}`, start, end });
+    }
+    return weeks.map((w) => {
+      const total = sales
+        .filter((s) => { const d = parseISO(s.date); return d.getFullYear() === monthCursor.y && d.getMonth() === monthCursor.m && d.getDate() >= w.start && d.getDate() <= w.end; })
+        .reduce((s, x) => s + x.total, 0);
+      return { ...w, total };
+    });
+  }, [monthCursor, sales]);
+  const monthTotal = monthWeeks.reduce((s, w) => s + w.total, 0);
+  const monthByMethod = useMemo(() => {
+    const m = {}; METHODS.forEach((mm) => (m[mm.id] = 0));
+    sales
+      .filter((s) => { const d = parseISO(s.date); return d.getFullYear() === monthCursor.y && d.getMonth() === monthCursor.m; })
+      .forEach((s) => (m[s.method] = (m[s.method] || 0) + s.total));
+    return m;
+  }, [sales, monthCursor]);
+
+  const pendingCount = pending.length;
+  const TABS = [
+    { id: "vender", label: "Vender", icon: ShoppingCart },
+    { id: "pausadas", label: "Pausadas", icon: Clock, badge: pendingCount },
+    { id: "caja", label: "Caja del día", icon: CalendarDays },
+    { id: "progreso", label: "Progreso", icon: TrendingUp },
+    { id: "productos", label: "Productos", icon: Package },
+  ];
+
+  if (loading) {
+    return (
+      <div style={{ background: C.bg, minHeight: "100vh" }} className="flex items-center justify-center">
+        <span style={{ color: C.vfd, fontFamily: "'JetBrains Mono', monospace" }}>Cargando caja…</span>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ background: C.bg, minHeight: "100vh", fontFamily: "Manrope, sans-serif" }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Manrope:wght@400;600;700;800&display=swap');
+        input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(1); }
+      `}</style>
+
+      <div className="px-5 pt-6 pb-4 max-w-md mx-auto flex items-start justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <Coffee size={20} color={C.gold} />
+            <span style={{ color: C.paper, fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, letterSpacing: "0.06em" }} className="text-lg">
+              NeoMarketing
+            </span>
+          </div>
+          <p style={{ color: C.inkDim }} className="text-xs mt-1">Registro de ventas y control diario</p>
+          {error && <p className="text-xs mt-2" style={{ color: C.danger }}>{error}</p>}
+        </div>
+        <button onClick={() => supabase.auth.signOut()} style={{ color: C.inkDim }} className="mt-1">
+          <LogOut size={18} />
+        </button>
+      </div>
+
+      <div className="max-w-md mx-auto px-5 pb-28">
+        {tab === "vender" && (
+          <VenderTab
+            products={products} cart={cart} addToCart={addToCart} decFromCart={decFromCart}
+            removeFromCart={removeFromCart} cartTotal={cartTotal} method={method} setMethod={setMethod}
+            customName={customName} setCustomName={setCustomName} customPrice={customPrice} setCustomPrice={setCustomPrice}
+            registerSale={registerSale} saleMsg={saleMsg}
+            tables={tables} selectedTable={selectedTable} setSelectedTable={setSelectedTable}
+            cashReceived={cashReceived} setCashReceived={setCashReceived}
+            pauseSale={pauseSale}
+          />
+        )}
+        {tab === "pausadas" && (
+          <PausadasTab pending={pending} resumePending={resumePending} deletePending={deletePending} />
+        )}
+        {tab === "caja" && (
+          <CajaTab
+            selDate={selDate} setSelDate={setSelDate} daySales={daySales} dayByMethod={dayByMethod}
+            dayTotal={dayTotal} deleteSale={deleteSale}
+          />
+        )}
+        {tab === "progreso" && (
+          <ProgresoTab
+            progView={progView} setProgView={setProgView}
+            weekStart={weekStart} setWeekStart={setWeekStart} weekChart={weekChart} weekTotal={weekTotal} weekByMethod={weekByMethod}
+            monthCursor={monthCursor} setMonthCursor={setMonthCursor} monthWeeks={monthWeeks} monthTotal={monthTotal} monthByMethod={monthByMethod}
+          />
+        )}
+        {tab === "productos" && (
+          <ProductosTab
+            products={products} addProduct={addProduct} editProduct={editProduct} deleteProduct={deleteProduct}
+            tables={tables} addTable={addTable} editTable={editTable} deleteTable={deleteTable}
+          />
+        )}
+      </div>
+
+      <div className="fixed bottom-0 left-0 right-0" style={{ background: C.panel, borderTop: "1px solid #3A2E22" }}>
+        <div className="max-w-md mx-auto grid grid-cols-5 gap-1 p-2">
+          {TABS.map((t) => {
+            const Icon = t.icon;
+            const active = tab === t.id;
+            return (
+              <KeyBtn key={t.id} active={active} onClick={() => setTab(t.id)} style={{ padding: "8px 2px", position: "relative" }}>
+                <div className="flex flex-col items-center gap-1">
+                  <div style={{ position: "relative" }}>
+                    <Icon size={16} />
+                    {!!t.badge && (
+                      <span className="flex items-center justify-center" style={{
+                        position: "absolute", top: -6, right: -8, minWidth: 14, height: 14, borderRadius: 7,
+                        background: C.danger, color: "#fff", fontSize: 9, fontWeight: 700, padding: "0 3px",
+                      }}>
+                        {t.badge}
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-[9px] leading-none text-center">{t.label}</span>
+                </div>
+              </KeyBtn>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ================= VENDER ================= */
+function VenderTab({
+  products, cart, addToCart, decFromCart, removeFromCart, cartTotal, method, setMethod,
+  customName, setCustomName, customPrice, setCustomPrice, registerSale, saleMsg,
+  tables, selectedTable, setSelectedTable, cashReceived, setCashReceived, pauseSale,
+}) {
+  const [query, setQuery] = useState("");
+
+  const filtered = useMemo(() => {
+    const q = normalize(query);
+    if (!q) return products;
+    return products.filter((p) => normalize(p.name).includes(q));
+  }, [products, query]);
+
+  const handlePick = (p) => { addToCart(p); setQuery(""); };
+  const change = cashReceived ? Number(cashReceived) - cartTotal : 0;
+
+  return (
+    <div className="flex flex-col gap-5 mt-2">
+      <div>
+        <SectionLabel>Buscar producto</SectionLabel>
+        <div className="relative mt-2">
+          <Search size={16} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: C.inkDim }} />
+          <input placeholder="Escribe el nombre del producto…" value={query} onChange={(e) => setQuery(e.target.value)}
+            className="w-full pl-8 pr-3 py-2 text-sm rounded" style={{ background: C.paper, color: C.ink }} />
+          {query && (
+            <button onClick={() => setQuery("")} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", color: C.inkDim }}>
+              <X size={14} />
+            </button>
+          )}
+        </div>
+        <div className="mt-2 rounded-lg overflow-hidden" style={{ background: C.paper, maxHeight: 220, overflowY: "auto" }}>
+          {filtered.length === 0 && (
+            <p className="text-sm px-3 py-3" style={{ color: C.inkDim }}>
+              {products.length === 0 ? "Agrega productos en la pestaña \"Productos\"." : "Sin resultados para esa búsqueda."}
+            </p>
+          )}
+          {filtered.map((p, idx) => (
+            <button key={p.id} onClick={() => handlePick(p)} className="w-full flex items-center justify-between px-3 py-2 text-left"
+              style={{ borderBottom: idx < filtered.length - 1 ? "1px dashed #C9BFA4" : "none", background: "transparent" }}>
+              <span className="text-sm" style={{ color: C.ink }}>{p.name}</span>
+              <span className="text-xs" style={{ color: C.gold, fontFamily: "'JetBrains Mono', monospace" }}>{fmt(p.price)}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <SectionLabel>Mesa</SectionLabel>
+        <div className="flex flex-wrap gap-2 mt-2">
+          <KeyBtn active={!selectedTable} onClick={() => setSelectedTable(null)} style={{ padding: "8px 12px" }}>Sin mesa</KeyBtn>
+          {tables.map((t) => (
+            <KeyBtn key={t.id} active={selectedTable === t.id} onClick={() => setSelectedTable(t.id)} style={{ padding: "8px 12px" }}>{t.name}</KeyBtn>
+          ))}
+          {tables.length === 0 && <p className="text-xs self-center" style={{ color: C.inkDim }}>Agrega mesas en la pestaña "Productos".</p>}
+        </div>
+      </div>
+
+      <div>
+        <SectionLabel>Ítem suelto</SectionLabel>
+        <div className="flex gap-2 mt-2">
+          <input placeholder="Nombre" value={customName} onChange={(e) => setCustomName(e.target.value)}
+            className="flex-1 min-w-0 px-2 py-2 text-sm rounded" style={{ background: C.paper, color: C.ink }} />
+          <input placeholder="Valor" inputMode="numeric" value={customPrice} onChange={(e) => setCustomPrice(e.target.value.replace(/\D/g, ""))}
+            className="w-24 px-2 py-2 text-sm rounded" style={{ background: C.paper, color: C.ink }} />
+          <button onClick={() => {
+              if (!customName.trim() || !customPrice) return;
+              addToCart({ id: "custom-" + Date.now(), name: customName.trim(), price: Number(customPrice) });
+              setCustomName(""); setCustomPrice("");
+            }} className="px-3 rounded" style={{ background: C.gold, color: "#241B0E" }}>
+            <Plus size={16} />
+          </button>
+        </div>
+      </div>
+
+      <div>
+        <SectionLabel>Cuenta</SectionLabel>
+        <div className="mt-2 rounded-lg p-3" style={{ background: C.paper, minHeight: 60 }}>
+          {cart.length === 0 && <p className="text-sm" style={{ color: C.inkDim }}>Busca un producto para agregarlo.</p>}
+          {cart.map((i) => (
+            <div key={i.id} className="flex items-center justify-between py-1" style={{ borderBottom: "1px dashed #C9BFA4" }}>
+              <div className="text-sm" style={{ color: C.ink }}>{i.name} <span style={{ color: C.inkDim }}>x{i.qty}</span></div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm" style={{ color: C.ink, fontFamily: "'JetBrains Mono', monospace" }}>{fmt(i.price * i.qty)}</span>
+                <button onClick={() => decFromCart(i.id)} style={{ color: C.inkDim }}>−</button>
+                <button onClick={() => removeFromCart(i.id)} style={{ color: C.danger }}><X size={14} /></button>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="mt-2"><VFD label="Total cuenta" value={cartTotal} /></div>
+      </div>
+
+      <div>
+        <SectionLabel>Pago</SectionLabel>
+        <div className="grid grid-cols-2 gap-2 mt-2">
+          {METHODS.map((m) => (
+            <KeyBtn key={m.id} onClick={() => setMethod(m.id)} active={method === m.id}
+              style={{ padding: "10px 8px", borderColor: method === m.id ? m.color : "#3A2E22" }}>
+              <span className="text-sm">{m.label}</span>
+            </KeyBtn>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <SectionLabel>Pago recibido</SectionLabel>
+        <input placeholder="¿Cuánto dio el cliente?" inputMode="numeric" value={cashReceived}
+          onChange={(e) => setCashReceived(e.target.value.replace(/\D/g, ""))}
+          className="w-full mt-2 px-2 py-2 text-sm rounded" style={{ background: C.paper, color: C.ink }} />
+        {cashReceived !== "" && (
+          <div className="mt-2"><VFD label={change < 0 ? "Falta" : "Vueltas"} value={Math.abs(change)} /></div>
+        )}
+      </div>
+
+      <div className="flex gap-2">
+        <button onClick={registerSale} className="flex-1 py-3 rounded-lg font-bold" style={{ background: C.vfd, color: "#0B1F1B" }}>
+          Registrar venta
+        </button>
+        <button onClick={pauseSale} className="px-4 py-3 rounded-lg font-bold" style={{ background: C.panelLight, color: C.paper, border: `1px solid ${C.gold}` }}>
+          Pausar
+        </button>
+      </div>
+      {saleMsg && <p className="text-center text-sm" style={{ color: saleMsg.includes("✓") ? C.vfd : C.danger }}>{saleMsg}</p>}
+    </div>
+  );
+}
+
+/* ================= PAUSADAS ================= */
+function PausadasTab({ pending, resumePending, deletePending }) {
+  return (
+    <div className="flex flex-col gap-5 mt-2">
+      <SectionLabel>Ventas en espera</SectionLabel>
+      {pending.length === 0 && (
+        <p className="text-sm" style={{ color: C.inkDim }}>No hay ventas pausadas. Desde "Vender" puedes usar el botón "Pausar".</p>
+      )}
+      <div className="flex flex-col gap-2">
+        {pending.map((p) => (
+          <div key={p.id} className="rounded-lg p-3" style={{ background: C.paper }}>
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-xs flex items-center gap-1" style={{ color: C.inkDim }}>
+                  <Clock size={11} /> {p.createdAt} · {p.tableName || "Sin mesa"}
+                </div>
+                <div className="text-sm mt-1" style={{ color: C.ink }}>{p.cart.map((i) => `${i.name} x${i.qty}`).join(", ")}</div>
+                <div className="text-sm mt-1 font-bold" style={{ color: C.gold, fontFamily: "'JetBrains Mono', monospace" }}>
+                  {fmt(p.cart.reduce((s, i) => s + i.price * i.qty, 0))}
+                </div>
+              </div>
+              <div className="flex flex-col gap-2 items-end shrink-0">
+                <button onClick={() => resumePending(p.id)} className="flex items-center gap-1 px-2 py-1 text-xs rounded font-bold" style={{ background: C.vfd, color: "#0B1F1B" }}>
+                  <PlayCircle size={12} /> Retomar
+                </button>
+                <button onClick={() => deletePending(p.id)} style={{ color: C.danger }}><Trash2 size={14} /></button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ================= CAJA DEL DÍA ================= */
+function CajaTab({ selDate, setSelDate, daySales, dayByMethod, dayTotal, deleteSale }) {
+  return (
+    <div className="flex flex-col gap-5 mt-2">
+      <div className="flex items-center gap-2">
+        <SectionLabel>Fecha</SectionLabel>
+        <input type="date" value={selDate} onChange={(e) => setSelDate(e.target.value)}
+          className="ml-auto px-2 py-1 text-sm rounded" style={{ background: C.paper, color: C.ink }} />
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        {METHODS.map((m) => <VFD key={m.id} label={m.label} value={dayByMethod[m.id] || 0} small />)}
+      </div>
+      <VFD label="Total del día" value={dayTotal} />
+      <div>
+        <SectionLabel>Transacciones</SectionLabel>
+        <div className="mt-2 flex flex-col gap-2">
+          {daySales.length === 0 && <p className="text-sm" style={{ color: C.inkDim }}>No hay ventas registradas este día.</p>}
+          {daySales.slice().reverse().map((s) => (
+            <div key={s.id} className="rounded-lg p-3" style={{ background: C.paper }}>
+              <div className="flex justify-between items-start">
+                <div>
+                  <div className="text-xs" style={{ color: C.inkDim }}>
+                    {s.time} · <span style={{ color: methodColor(s.method) }}>{methodLabel(s.method)}</span>
+                    {s.tableName ? ` · ${s.tableName}` : ""}
+                  </div>
+                  <div className="text-sm mt-1" style={{ color: C.ink }}>{s.items.map((i) => `${i.name} x${i.qty}`).join(", ")}</div>
+                  {s.cashReceived != null && (
+                    <div className="text-xs mt-1" style={{ color: C.inkDim, fontFamily: "'JetBrains Mono', monospace" }}>
+                      Recibió {fmt(s.cashReceived)} · {s.change < 0 ? `Faltó ${fmt(Math.abs(s.change))}` : `Vueltas ${fmt(s.change)}`}
+                    </div>
+                  )}
+                </div>
+                <div className="flex flex-col items-end gap-1">
+                  <span className="text-sm font-bold" style={{ color: C.ink, fontFamily: "'JetBrains Mono', monospace" }}>{fmt(s.total)}</span>
+                  <button onClick={() => deleteSale(s.id)} style={{ color: C.danger }}><Trash2 size={14} /></button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ================= PROGRESO ================= */
+function ProgresoTab(props) {
+  const { progView, setProgView, weekStart, setWeekStart, weekChart, weekTotal, weekByMethod, monthCursor, setMonthCursor, monthWeeks, monthTotal, monthByMethod } = props;
+  return (
+    <div className="flex flex-col gap-5 mt-2">
+      <div className="grid grid-cols-2 gap-2">
+        <KeyBtn active={progView === "semana"} onClick={() => setProgView("semana")} style={{ padding: "8px" }}>Semana</KeyBtn>
+        <KeyBtn active={progView === "mes"} onClick={() => setProgView("mes")} style={{ padding: "8px" }}>Mes</KeyBtn>
+      </div>
+      {progView === "semana" ? (
+        <>
+          <div className="flex items-center justify-between">
+            <button onClick={() => setWeekStart(addDays(weekStart, -7))} style={{ color: C.gold }}><ChevronLeft /></button>
+            <span className="text-sm" style={{ color: C.paper }}>{toISO(weekStart)} — {toISO(addDays(weekStart, 6))}</span>
+            <button onClick={() => setWeekStart(addDays(weekStart, 7))} style={{ color: C.gold }}><ChevronRight /></button>
+          </div>
+          <ChartCard data={weekChart} />
+          <VFD label="Total de la semana" value={weekTotal} />
+          <MethodBreakdown byMethod={weekByMethod} />
+        </>
+      ) : (
+        <>
+          <div className="flex items-center justify-between">
+            <button onClick={() => setMonthCursor((c) => { const m = c.m - 1; return m < 0 ? { y: c.y - 1, m: 11 } : { y: c.y, m }; })} style={{ color: C.gold }}><ChevronLeft /></button>
+            <span className="text-sm" style={{ color: C.paper }}>{MESES[monthCursor.m]} {monthCursor.y}</span>
+            <button onClick={() => setMonthCursor((c) => { const m = c.m + 1; return m > 11 ? { y: c.y + 1, m: 0 } : { y: c.y, m }; })} style={{ color: C.gold }}><ChevronRight /></button>
+          </div>
+          <ChartCard data={monthWeeks.map((w) => ({ label: w.label, total: w.total }))} />
+          <VFD label="Total del mes" value={monthTotal} />
+          <MethodBreakdown byMethod={monthByMethod} />
+        </>
+      )}
+    </div>
+  );
+}
+
+function ChartCard({ data }) {
+  return (
+    <div className="rounded-lg p-2" style={{ background: C.paper, height: 200 }}>
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+          <CartesianGrid stroke="#D9CFAF" vertical={false} />
+          <XAxis dataKey="label" tick={{ fontSize: 11, fill: C.ink }} axisLine={{ stroke: "#C9BFA4" }} tickLine={false} />
+          <YAxis hide />
+          <Tooltip formatter={(v) => fmt(v)} contentStyle={{ background: C.panel, border: "none", color: C.paper, fontSize: 12 }} labelStyle={{ color: C.paper }} />
+          <Bar dataKey="total" radius={[4, 4, 0, 0]}>
+            {data.map((_, i) => <Cell key={i} fill={C.gold} />)}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+function MethodBreakdown({ byMethod }) {
+  return (
+    <div>
+      <SectionLabel>Por método de pago</SectionLabel>
+      <div className="grid grid-cols-2 gap-2 mt-2">
+        {METHODS.map((m) => <VFD key={m.id} label={m.label} value={byMethod[m.id] || 0} small />)}
+      </div>
+    </div>
+  );
+}
+
+/* ================= PRODUCTOS ================= */
+function ProductosTab({ products, addProduct, editProduct, deleteProduct, tables, addTable, editTable, deleteTable }) {
+  const [name, setName] = useState("");
+  const [price, setPrice] = useState("");
+  const [editingId, setEditingId] = useState(null);
+  const [editName, setEditName] = useState("");
+  const [editPrice, setEditPrice] = useState("");
+
+  const [tableName, setTableName] = useState("");
+  const [editingTableId, setEditingTableId] = useState(null);
+  const [editTableName, setEditTableName] = useState("");
+
+  return (
+    <div className="flex flex-col gap-5 mt-2">
+      <div>
+        <SectionLabel>Nuevo producto</SectionLabel>
+        <div className="flex gap-2 mt-2">
+          <input placeholder="Nombre" value={name} onChange={(e) => setName(e.target.value)}
+            className="flex-1 min-w-0 px-2 py-2 text-sm rounded" style={{ background: C.paper, color: C.ink }} />
+          <input placeholder="Valor" inputMode="numeric" value={price} onChange={(e) => setPrice(e.target.value.replace(/\D/g, ""))}
+            className="w-24 px-2 py-2 text-sm rounded" style={{ background: C.paper, color: C.ink }} />
+          <button onClick={() => { addProduct(name, price); setName(""); setPrice(""); }}
+            className="px-3 rounded" style={{ background: C.gold, color: "#241B0E" }}>
+            <Plus size={16} />
+          </button>
+        </div>
+      </div>
+
+      <div>
+        <SectionLabel>Catálogo</SectionLabel>
+        <div className="mt-2 flex flex-col gap-2">
+          {products.length === 0 && <p className="text-sm" style={{ color: C.inkDim }}>Aún no hay productos.</p>}
+          {products.map((p) => (
+            <div key={p.id} className="rounded-lg p-3 flex items-center justify-between" style={{ background: C.paper }}>
+              {editingId === p.id ? (
+                <>
+                  <div className="flex gap-2 flex-1">
+                    <input value={editName} onChange={(e) => setEditName(e.target.value)} className="flex-1 min-w-0 px-2 py-1 text-sm rounded" style={{ background: "#fff", color: C.ink }} />
+                    <input value={editPrice} onChange={(e) => setEditPrice(e.target.value.replace(/\D/g, ""))} className="w-20 px-2 py-1 text-sm rounded" style={{ background: "#fff", color: C.ink }} />
+                  </div>
+                  <button onClick={() => { editProduct(p.id, editName, editPrice); setEditingId(null); }} className="ml-2" style={{ color: C.vfdDim }}><Check size={16} /></button>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <div className="text-sm" style={{ color: C.ink }}>{p.name}</div>
+                    <div className="text-xs" style={{ color: C.inkDim, fontFamily: "'JetBrains Mono', monospace" }}>{fmt(p.price)}</div>
+                  </div>
+                  <div className="flex gap-3">
+                    <button onClick={() => { setEditingId(p.id); setEditName(p.name); setEditPrice(String(p.price)); }} style={{ color: C.inkDim }}><Pencil size={14} /></button>
+                    <button onClick={() => deleteProduct(p.id)} style={{ color: C.danger }}><Trash2 size={14} /></button>
+                  </div>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <SectionLabel>Mesas</SectionLabel>
+        <div className="flex gap-2 mt-2">
+          <input placeholder="Nombre o número de mesa" value={tableName} onChange={(e) => setTableName(e.target.value)}
+            className="flex-1 min-w-0 px-2 py-2 text-sm rounded" style={{ background: C.paper, color: C.ink }} />
+          <button onClick={() => { addTable(tableName); setTableName(""); }}
+            className="px-3 rounded" style={{ background: C.gold, color: "#241B0E" }}>
+            <Plus size={16} />
+          </button>
+        </div>
+        <div className="mt-2 flex flex-col gap-2">
+          {tables.length === 0 && <p className="text-sm" style={{ color: C.inkDim }}>Aún no hay mesas registradas.</p>}
+          {tables.map((t) => (
+            <div key={t.id} className="rounded-lg p-3 flex items-center justify-between" style={{ background: C.paper }}>
+              {editingTableId === t.id ? (
+                <>
+                  <input value={editTableName} onChange={(e) => setEditTableName(e.target.value)} className="flex-1 min-w-0 px-2 py-1 text-sm rounded" style={{ background: "#fff", color: C.ink }} />
+                  <button onClick={() => { editTable(t.id, editTableName); setEditingTableId(null); }} className="ml-2" style={{ color: C.vfdDim }}><Check size={16} /></button>
+                </>
+              ) : (
+                <>
+                  <div className="text-sm" style={{ color: C.ink }}>{t.name}</div>
+                  <div className="flex gap-3">
+                    <button onClick={() => { setEditingTableId(t.id); setEditTableName(t.name); }} style={{ color: C.inkDim }}><Pencil size={14} /></button>
+                    <button onClick={() => deleteTable(t.id)} style={{ color: C.danger }}><Trash2 size={14} /></button>
+                  </div>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,46 @@
+/* Limpieza total */
+body {
+  margin: 0;
+  background-color: #12100e; /* Fondo oscuro tipo café */
+  color: #d1b07a;           /* Color dorado para el texto */
+  font-family: 'Segoe UI', Roboto, sans-serif;
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+}
+
+#root {
+  width: 100%;
+  max-width: 500px; /* Ancho tipo móvil */
+  padding: 20px;
+  box-sizing: border-box;
+}
+
+/* Estilo para los inputs y botones */
+input, button {
+  background-color: #2a2520;
+  color: #d1b07a;
+  border: 1px solid #5e4d3a;
+  padding: 12px;
+  border-radius: 4px;
+}
+
+/* Estilo para los botones principales */
+button {
+  cursor: pointer;
+  font-weight: bold;
+}
+
+/* Encabezados */
+h1, h2 {
+  color: #d1b07a;
+  text-align: center;
+}
+
+/* Ajuste para el catálogo (la lista) */
+.catalogo-item {
+  border-bottom: 1px dashed #5e4d3a;
+  padding: 10px 0;
+  display: flex;
+  justify-content: space-between;
+}
