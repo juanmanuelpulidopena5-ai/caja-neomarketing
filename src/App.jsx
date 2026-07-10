@@ -201,57 +201,65 @@ function CajaApp({ session }) {
   const [tables, setTables] = useState([]);
   const [sales, setSales] = useState([]);
   const [pending, setPending] = useState([]);
+  const [cashBases, setCashBases] = useState([]);
+  const [withdrawals, setWithdrawals] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [tab, setTab] = useState("vender");
 
   const loadAll = useCallback(async () => {
-  try {
-    // Quitamos temporalmente el .order("created_at") para ver si es el causante
-    const [p, t, s, pe] = await Promise.all([
-      supabase.from("products").select("*").eq("user_id", userId),
-      supabase.from("tables_config").select("*").eq("user_id", userId),
-      supabase.from("sales").select("*").eq("user_id", userId),
-      supabase.from("pending_sales").select("*").eq("user_id", userId),
-    ]);
-    
-    // Verificamos si hubo error en alguna consulta
-    if (p.error) throw p.error;
-    if (t.error) throw t.error;
-    if (s.error) throw s.error;
-    if (pe.error) throw pe.error;
+    try {
+      const [p, t, s, pe, cb, wd] = await Promise.all([
+        supabase.from("products").select("*").eq("user_id", userId),
+        supabase.from("tables_config").select("*").eq("user_id", userId),
+        supabase.from("sales").select("*").eq("user_id", userId),
+        supabase.from("pending_sales").select("*").eq("user_id", userId),
+        supabase.from("cash_base").select("*").eq("user_id", userId),
+        supabase.from("cash_withdrawals").select("*").eq("user_id", userId),
+      ]);
 
-    setProducts((p.data || []).map((r) => ({ id: r.id, name: r.name, price: Number(r.price) })));
-    setTables((t.data || []).map((r) => ({ id: r.id, name: r.name })));
-    setSales((s.data || []).map((r) => ({
-      id: r.id,
-      date: r.date,
-      time: r.time,
-      items: r.items,
-      total: Number(r.total),
-      method: r.method,
-      tableId: r.table_id,
-      tableName: r.table_name,
-      cashReceived: r.cash_received != null ? Number(r.cash_received) : null,
-      change: r.change != null ? Number(r.change) : null,
-    })));
-    setPending((pe.data || []).map((r) => ({
-      id: r.id,
-      tableId: r.table_id,
-      tableName: r.table_name,
-      cart: r.cart,
-      method: r.method,
-      createdAt: new Date(r.created_at).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" }),
-    })));
-    
-    setError("");
-  } catch (e) {
-    console.error("Error detallado:", e); // Esto mostrará el error real en la consola
-    setError("No se pudieron cargar los datos.");
-  } finally {
-    setLoading(false);
-  }
-}, [userId]); // Asegúrate de incluir userId aquí
+      if (p.error) throw p.error;
+      if (t.error) throw t.error;
+      if (s.error) throw s.error;
+      if (pe.error) throw pe.error;
+      if (cb.error) throw cb.error;
+      if (wd.error) throw wd.error;
+
+      setProducts((p.data || []).map((r) => ({ id: r.id, name: r.name, price: Number(r.price) })));
+      setTables((t.data || []).map((r) => ({ id: r.id, name: r.name })));
+      setSales((s.data || []).map((r) => ({
+        id: r.id,
+        date: r.date,
+        time: r.time,
+        items: r.items,
+        total: Number(r.total),
+        method: r.method,
+        tableId: r.table_id,
+        tableName: r.table_name,
+        cashReceived: r.cash_received != null ? Number(r.cash_received) : null,
+        change: r.change != null ? Number(r.change) : null,
+      })));
+      setPending((pe.data || []).map((r) => ({
+        id: r.id,
+        tableId: r.table_id,
+        tableName: r.table_name,
+        cart: r.cart,
+        method: r.method,
+        createdAt: new Date(r.created_at).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" }),
+      })));
+      setCashBases((cb.data || []).map((r) => ({ id: r.id, date: r.date, amount: Number(r.amount) })));
+      setWithdrawals((wd.data || []).map((r) => ({
+        id: r.id, date: r.date, description: r.description, amount: Number(r.amount), time: r.time,
+      })));
+
+      setError("");
+    } catch (e) {
+      console.error("Error detallado:", e);
+      setError("No se pudieron cargar los datos.");
+    } finally {
+      setLoading(false);
+    }
+  }, [userId]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
@@ -374,6 +382,34 @@ function CajaApp({ session }) {
     if (!e) loadAll();
   };
 
+  /* ---------- base de caja y retiros ---------- */
+  const setCashBase = async (date, amount) => {
+    if (amount === "" || isNaN(Number(amount))) return;
+    const { error: e } = await supabase.from("cash_base").upsert(
+      { user_id: userId, date, amount: Number(amount) },
+      { onConflict: "user_id,date" }
+    );
+    if (e) setError("No se guardó la base de caja."); else loadAll();
+  };
+
+  const addWithdrawal = async (date, description, amount) => {
+    if (!amount) return;
+    const now = new Date();
+    const { error: e } = await supabase.from("cash_withdrawals").insert({
+      user_id: userId,
+      date,
+      description: description.trim() || "Retiro",
+      amount: Number(amount),
+      time: now.toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" }),
+    });
+    if (e) setError("No se guardó el retiro."); else loadAll();
+  };
+
+  const deleteWithdrawal = async (id) => {
+    const { error: e } = await supabase.from("cash_withdrawals").delete().eq("id", id);
+    if (!e) loadAll();
+  };
+
   /* ---------- caja del día ---------- */
   const [selDate, setSelDate] = useState(toISO(new Date()));
   const daySales = useMemo(() => sales.filter((s) => s.date === selDate), [sales, selDate]);
@@ -485,6 +521,8 @@ function CajaApp({ session }) {
           <CajaTab
             selDate={selDate} setSelDate={setSelDate} daySales={daySales} dayByMethod={dayByMethod}
             dayTotal={dayTotal} deleteSale={deleteSale}
+            cashBases={cashBases} withdrawals={withdrawals}
+            setCashBase={setCashBase} addWithdrawal={addWithdrawal} deleteWithdrawal={deleteWithdrawal}
           />
         )}
         {tab === "progreso" && (
@@ -696,7 +734,23 @@ function PausadasTab({ pending, resumePending, deletePending }) {
 }
 
 /* ================= CAJA DEL DÍA ================= */
-function CajaTab({ selDate, setSelDate, daySales, dayByMethod, dayTotal, deleteSale }) {
+function CajaTab({
+  selDate, setSelDate, daySales, dayByMethod, dayTotal, deleteSale,
+  cashBases, withdrawals, setCashBase, addWithdrawal, deleteWithdrawal,
+}) {
+  const dayBase = cashBases.find((cb) => cb.date === selDate)?.amount || 0;
+  const dayWithdrawals = useMemo(() => withdrawals.filter((w) => w.date === selDate), [withdrawals, selDate]);
+  const dayWithdrawalsTotal = dayWithdrawals.reduce((s, w) => s + w.amount, 0);
+  const expectedCash = dayBase + (dayByMethod.efectivo || 0) - dayWithdrawalsTotal;
+
+  const [baseInput, setBaseInput] = useState(dayBase ? String(dayBase) : "");
+  const [wDesc, setWDesc] = useState("");
+  const [wAmount, setWAmount] = useState("");
+
+  useEffect(() => {
+    setBaseInput(dayBase ? String(dayBase) : "");
+  }, [selDate, dayBase]);
+
   return (
     <div className="flex flex-col gap-5 mt-2">
       <div className="flex items-center gap-2">
@@ -704,10 +758,66 @@ function CajaTab({ selDate, setSelDate, daySales, dayByMethod, dayTotal, deleteS
         <input type="date" value={selDate} onChange={(e) => setSelDate(e.target.value)}
           className="ml-auto px-2 py-1 text-sm rounded" style={{ background: C.paper, color: C.ink }} />
       </div>
+
+      <div>
+        <SectionLabel>Base de caja (efectivo inicial)</SectionLabel>
+        <div className="flex gap-2 mt-2">
+          <input
+            inputMode="numeric"
+            placeholder="¿Con cuánto abre la caja hoy?"
+            value={baseInput}
+            onChange={(e) => setBaseInput(e.target.value.replace(/\D/g, ""))}
+            className="flex-1 min-w-0 px-2 py-2 text-sm rounded"
+            style={{ background: C.paper, color: C.ink }}
+          />
+          <button
+            onClick={() => setCashBase(selDate, baseInput)}
+            className="px-3 rounded font-bold"
+            style={{ background: C.gold, color: "#241B0E" }}
+          >
+            Guardar
+          </button>
+        </div>
+      </div>
+
       <div className="grid grid-cols-2 gap-2">
         {METHODS.map((m) => <VFD key={m.id} label={m.label} value={dayByMethod[m.id] || 0} small />)}
       </div>
       <VFD label="Total del día" value={dayTotal} />
+
+      <div>
+        <SectionLabel>Retiros de caja</SectionLabel>
+        <div className="flex gap-2 mt-2">
+          <input placeholder="¿Para qué se sacó?" value={wDesc} onChange={(e) => setWDesc(e.target.value)}
+            className="flex-1 min-w-0 px-2 py-2 text-sm rounded" style={{ background: C.paper, color: C.ink }} />
+          <input inputMode="numeric" placeholder="Valor" value={wAmount} onChange={(e) => setWAmount(e.target.value.replace(/\D/g, ""))}
+            className="w-24 px-2 py-2 text-sm rounded" style={{ background: C.paper, color: C.ink }} />
+          <button
+            onClick={() => { addWithdrawal(selDate, wDesc, wAmount); setWDesc(""); setWAmount(""); }}
+            className="px-3 rounded" style={{ background: C.gold, color: "#241B0E" }}
+          >
+            <Plus size={16} />
+          </button>
+        </div>
+        <div className="mt-2 flex flex-col gap-2">
+          {dayWithdrawals.length === 0 && <p className="text-sm" style={{ color: C.inkDim }}>No hay retiros registrados este día.</p>}
+          {dayWithdrawals.slice().reverse().map((w) => (
+            <div key={w.id} className="rounded-lg p-3 flex items-center justify-between" style={{ background: C.paper }}>
+              <div>
+                <div className="text-xs" style={{ color: C.inkDim }}>{w.time}</div>
+                <div className="text-sm" style={{ color: C.ink }}>{w.description}</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-bold" style={{ color: C.danger, fontFamily: "'JetBrains Mono', monospace" }}>-{fmt(w.amount)}</span>
+                <button onClick={() => deleteWithdrawal(w.id)} style={{ color: C.danger }}><Trash2 size={14} /></button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <VFD label="Efectivo esperado en caja" value={expectedCash} />
+
       <div>
         <SectionLabel>Transacciones</SectionLabel>
         <div className="mt-2 flex flex-col gap-2">
