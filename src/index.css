@@ -1,10 +1,4 @@
-/* Reinicio simple: los componentes ya traen sus propios estilos (Tailwind + inline styles) */
-body {
-  margin: 0;
-  font-family: 'Segoe UI', Roboto, sans-serif;
-  -webkit-font-smoothing: antialiased;
-}
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-* {
-  box-sizing: border-box;
-}

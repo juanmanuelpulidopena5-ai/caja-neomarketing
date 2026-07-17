@@ -7,39 +7,39 @@ import {
   Plus, Trash2, ShoppingCart, CalendarDays, TrendingUp, Package,
   ChevronLeft, ChevronRight, X, Coffee, Pencil, Check, Search, Clock, PlayCircle, LogOut,
 } from "lucide-react";
-
+ 
 /* ---------- paleta / tokens (tema claro, sin efectos LED) ---------- */
 const C = {
-  bg: "#F3EFE6",
-  header: "#C08A3E",
-  headerDark: "#A5722F",
+  bg: "#FAFAFA",
+  header: "#FFFFFF",
+  headerDark: "#111111",
   paper: "#FFFFFF",
-  border: "#E5DCC7",
-  ink: "#2B2119",
-  inkDim: "#8A7A63",
-  gold: "#D9A441",
-  goldDark: "#B8863B",
-  goldSoft: "#F4E6C7",
-  danger: "#B5453D",
-  dangerSoft: "#F3DEDB",
+  border: "#E8E8E8",
+  ink: "#111111",
+  inkDim: "#8A8A8A",
+  gold: "#111111",
+  goldDark: "#111111",
+  goldSoft: "#F2F2F2",
+  danger: "#B91C1C",
+  dangerSoft: "#F5E9E9",
 };
-
+ 
 const METHODS = [
-  { id: "efectivo", label: "Efectivo", color: "#D9A441" },
-  { id: "nequi", label: "Nequi", color: "#C9714F" },
-  { id: "daviplata", label: "Daviplata", color: "#9E5540" },
-  { id: "tarjeta", label: "Tarjeta", color: "#8A7A4B" },
-  { id: "transferencia", label: "Transferencia", color: "#B8863B" },
+  { id: "efectivo", label: "Efectivo", color: "#111111" },
+  { id: "nequi", label: "Nequi", color: "#525252" },
+  { id: "daviplata", label: "Daviplata", color: "#8A8A8A" },
+  { id: "tarjeta", label: "Tarjeta", color: "#404040" },
+  { id: "transferencia", label: "Transferencia", color: "#A3A3A3" },
 ];
 const methodColor = (id) => METHODS.find((m) => m.id === id)?.color || "#999";
 const methodLabel = (id) => METHODS.find((m) => m.id === id)?.label || id;
-
+ 
 const fmt = (n) =>
   new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(n || 0);
-
+ 
 const normalize = (s) =>
   (s || "").toString().normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
-
+ 
 const toISO = (d) => {
   const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, "0"), day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
@@ -56,23 +56,23 @@ const weekStartOf = (d) => {
 const addDays = (d, n) => { const c = new Date(d); c.setDate(c.getDate() + n); return c; };
 const DIAS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
 const MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
-
+ 
 /* ---------- caja de información (reemplaza el visor con brillo) ---------- */
 function VFD({ label, value, small, tone }) {
   const valueColor = tone === "danger" ? C.danger : tone === "accent" ? C.goldDark : C.ink;
   return (
     <div
-      className="rounded-lg px-3 py-2 flex flex-col"
+      className="rounded-md px-3 py-2 flex flex-col"
       style={{ background: C.paper, border: `1px solid ${C.border}` }}
     >
-      <span className="text-[10px] uppercase tracking-widest mb-1" style={{ color: C.inkDim, fontFamily: "Manrope, sans-serif", fontWeight: 700 }}>
+      <span className="text-[10px] uppercase tracking-wide mb-1" style={{ color: C.inkDim, fontFamily: "Inter, sans-serif", fontWeight: 600 }}>
         {label}
       </span>
       <span
         className={small ? "text-base" : "text-xl"}
         style={{
           color: valueColor,
-          fontFamily: "'JetBrains Mono', monospace",
+          fontFamily: "'Inter', sans-serif",
           fontWeight: 700,
           fontVariantNumeric: "tabular-nums",
         }}
@@ -82,7 +82,7 @@ function VFD({ label, value, small, tone }) {
     </div>
   );
 }
-
+ 
 /* ---------- botón tipo pestaña / selección ---------- */
 function KeyBtn({ active, onClick, children, style }) {
   return (
@@ -90,7 +90,7 @@ function KeyBtn({ active, onClick, children, style }) {
       onClick={onClick}
       className="transition-colors"
       style={{
-        fontFamily: "Manrope, sans-serif",
+        fontFamily: "Inter, sans-serif",
         fontWeight: 600,
         borderRadius: 8,
         border: `1px solid ${active ? C.gold : C.border}`,
@@ -103,28 +103,30 @@ function KeyBtn({ active, onClick, children, style }) {
     </button>
   );
 }
-
+ 
+ 
+ 
 function SectionLabel({ children }) {
   return (
-    <span className="text-xs uppercase tracking-widest" style={{ color: C.goldDark, fontFamily: "Manrope, sans-serif", fontWeight: 700 }}>
+    <span className="text-[11px] uppercase tracking-wide" style={{ color: C.inkDim, fontFamily: "Inter, sans-serif", fontWeight: 600 }}>
       {children}
     </span>
   );
 }
-
+ 
 function Card({ children, style }) {
   return (
-    <div className="rounded-lg p-4" style={{ background: C.paper, border: `1px solid ${C.border}`, ...style }}>
+    <div className="rounded-md p-4" style={{ background: C.paper, border: `1px solid ${C.border}`, ...style }}>
       {children}
     </div>
   );
 }
-
+ 
 /* ================= APP RAÍZ: maneja sesión ================= */
 export default function CajaRoot() {
   const [session, setSession] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
-
+ 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
@@ -133,20 +135,22 @@ export default function CajaRoot() {
     const { data } = supabase.auth.onAuthStateChange((_event, sess) => setSession(sess));
     return () => data.subscription.unsubscribe();
   }, []);
-
+ 
   if (authLoading) {
     return (
       <div style={{ background: C.bg, minHeight: "100vh" }} className="flex items-center justify-center">
-        <span style={{ color: C.goldDark, fontFamily: "'JetBrains Mono', monospace" }}>Cargando…</span>
+        <span style={{ color: C.goldDark, fontFamily: "'Inter', sans-serif" }}>Cargando…</span>
       </div>
     );
   }
-
+ 
   if (!session) return <LoginScreen />;
-
+ 
   return <CajaApp session={session} />;
 }
-
+ 
+ 
+ 
 /* ================= LOGIN ================= */
 function LoginScreen() {
   const [mode, setMode] = useState("signin");
@@ -154,7 +158,7 @@ function LoginScreen() {
   const [password, setPassword] = useState("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
-
+ 
   const submit = async (e) => {
     e.preventDefault();
     setMsg(""); setBusy(true);
@@ -169,14 +173,14 @@ function LoginScreen() {
       if (error) setMsg(error.message);
     }
   };
-
+ 
   return (
-    <div style={{ background: C.bg, minHeight: "100vh", fontFamily: "Manrope, sans-serif" }} className="flex items-center justify-center px-5">
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Manrope:wght@400;600;700;800&display=swap');`}</style>
-      <div className="w-full max-w-sm rounded-lg p-6" style={{ background: C.paper, border: `1px solid ${C.border}` }}>
+    <div style={{ background: C.bg, minHeight: "100vh", fontFamily: "Inter, sans-serif" }} className="flex items-center justify-center px-5">
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');`}</style>
+      <div className="w-full max-w-sm rounded-md p-6" style={{ background: C.paper, border: `1px solid ${C.border}` }}>
         <div className="flex items-center gap-2 justify-center mb-6">
-          <Coffee size={22} color={C.goldDark} />
-          <span style={{ color: C.ink, fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, letterSpacing: "0.06em" }} className="text-lg">
+          <Coffee size={20} color={C.ink} strokeWidth={1.5} />
+          <span style={{ color: C.ink, fontFamily: "'Inter', sans-serif", fontWeight: 600, letterSpacing: "0.02em" }} className="text-base">
             NeoMarketing
           </span>
         </div>
@@ -185,7 +189,7 @@ function LoginScreen() {
             className="px-3 py-2 text-sm rounded" style={{ background: "#FFFFFF", color: C.ink, border: `1px solid ${C.border}` }} />
           <input type="password" required placeholder="Contraseña" value={password} onChange={(e) => setPassword(e.target.value)}
             className="px-3 py-2 text-sm rounded" style={{ background: "#FFFFFF", color: C.ink, border: `1px solid ${C.border}` }} />
-          <button type="submit" disabled={busy} className="py-3 rounded-lg font-bold" style={{ background: C.gold, color: "#FFFFFF" }}>
+          <button type="submit" disabled={busy} className="py-3 rounded-md font-semibold" style={{ background: C.gold, color: "#FFFFFF" }}>
             {mode === "signup" ? "Crear cuenta" : "Iniciar sesión"}
           </button>
         </form>
@@ -201,11 +205,11 @@ function LoginScreen() {
     </div>
   );
 }
-
+ 
 /* ================= APP PRINCIPAL (con sesión activa) ================= */
 function CajaApp({ session }) {
   const userId = session.user.id;
-
+ 
   const [products, setProducts] = useState([]);
   const [tables, setTables] = useState([]);
   const [sales, setSales] = useState([]);
@@ -215,7 +219,7 @@ function CajaApp({ session }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [tab, setTab] = useState("vender");
-
+ 
   const loadAll = useCallback(async () => {
     try {
       const [p, t, s, pe, cb, wd] = await Promise.all([
@@ -226,14 +230,14 @@ function CajaApp({ session }) {
         supabase.from("cash_base").select("*").eq("user_id", userId),
         supabase.from("cash_withdrawals").select("*").eq("user_id", userId),
       ]);
-
+ 
       if (p.error) throw p.error;
       if (t.error) throw t.error;
       if (s.error) throw s.error;
       if (pe.error) throw pe.error;
       if (cb.error) throw cb.error;
       if (wd.error) throw wd.error;
-
+ 
       setProducts((p.data || []).map((r) => ({ id: r.id, name: r.name, price: Number(r.price) })));
       setTables((t.data || []).map((r) => ({ id: r.id, name: r.name })));
       setSales((s.data || []).map((r) => ({
@@ -260,7 +264,7 @@ function CajaApp({ session }) {
       setWithdrawals((wd.data || []).map((r) => ({
         id: r.id, date: r.date, description: r.description, amount: Number(r.amount), time: r.time,
       })));
-
+ 
       setError("");
     } catch (e) {
       console.error("Error detallado:", e);
@@ -269,9 +273,9 @@ function CajaApp({ session }) {
       setLoading(false);
     }
   }, [userId]);
-
+ 
   useEffect(() => { loadAll(); }, [loadAll]);
-
+ 
   /* ---------- productos ---------- */
   const addProduct = async (name, price) => {
     if (!name.trim() || !price) return;
@@ -286,7 +290,7 @@ function CajaApp({ session }) {
     const { error: e } = await supabase.from("products").delete().eq("id", id);
     if (e) setError("No se pudo eliminar el producto."); else loadAll();
   };
-
+ 
   /* ---------- mesas ---------- */
   const addTable = async (name) => {
     if (!name.trim()) return;
@@ -303,7 +307,7 @@ function CajaApp({ session }) {
     if (e) setError("No se pudo eliminar la mesa."); else loadAll();
     if (selectedTable === id) setSelectedTable(null);
   };
-
+ 
   /* ---------- venta activa (solo local hasta registrar/pausar) ---------- */
   const [cart, setCart] = useState([]);
   const [method, setMethod] = useState(null);
@@ -312,7 +316,7 @@ function CajaApp({ session }) {
   const [customPrice, setCustomPrice] = useState("");
   const [cashReceived, setCashReceived] = useState("");
   const [saleMsg, setSaleMsg] = useState("");
-
+ 
   const addToCart = (item) => {
     setCart((prev) => {
       const idx = prev.findIndex((i) => i.id === item.id);
@@ -323,7 +327,7 @@ function CajaApp({ session }) {
   const decFromCart = (id) => setCart((prev) => prev.flatMap((i) => (i.id === id ? (i.qty > 1 ? [{ ...i, qty: i.qty - 1 }] : []) : [i])));
   const removeFromCart = (id) => setCart((prev) => prev.filter((i) => i.id !== id));
   const cartTotal = cart.reduce((s, i) => s + i.price * i.qty, 0);
-
+ 
   const registerSale = async () => {
     if (cart.length === 0) { setSaleMsg("Agrega al menos un producto."); return; }
     if (!method) { setSaleMsg("Selecciona cómo pagaron."); return; }
@@ -349,12 +353,12 @@ function CajaApp({ session }) {
     setTimeout(() => setSaleMsg(""), 2000);
     loadAll();
   };
-
+ 
   const deleteSale = async (id) => {
     const { error: e } = await supabase.from("sales").delete().eq("id", id);
     if (!e) loadAll();
   };
-
+ 
   /* ---------- pausar / reanudar ---------- */
   const pauseSale = async () => {
     if (cart.length === 0) { setSaleMsg("Agrega al menos un producto para pausar."); return; }
@@ -372,7 +376,7 @@ function CajaApp({ session }) {
     setTimeout(() => setSaleMsg(""), 2000);
     loadAll();
   };
-
+ 
   const resumePending = async (id) => {
     const entry = pending.find((p) => p.id === id);
     if (!entry) return;
@@ -385,12 +389,12 @@ function CajaApp({ session }) {
     if (!e) loadAll();
     setTab("vender");
   };
-
+ 
   const deletePending = async (id) => {
     const { error: e } = await supabase.from("pending_sales").delete().eq("id", id);
     if (!e) loadAll();
   };
-
+ 
   /* ---------- base de caja y retiros ---------- */
   const setCashBase = async (date, amount) => {
     if (amount === "" || isNaN(Number(amount))) return;
@@ -400,7 +404,7 @@ function CajaApp({ session }) {
     );
     if (e) setError("No se guardó la base de caja."); else loadAll();
   };
-
+ 
   const addWithdrawal = async (date, description, amount) => {
     if (!amount) return;
     const now = new Date();
@@ -413,12 +417,12 @@ function CajaApp({ session }) {
     });
     if (e) setError("No se guardó el retiro."); else loadAll();
   };
-
+ 
   const deleteWithdrawal = async (id) => {
     const { error: e } = await supabase.from("cash_withdrawals").delete().eq("id", id);
     if (!e) loadAll();
   };
-
+ 
   /* ---------- caja del día ---------- */
   const [selDate, setSelDate] = useState(toISO(new Date()));
   const daySales = useMemo(() => sales.filter((s) => s.date === selDate), [sales, selDate]);
@@ -428,7 +432,7 @@ function CajaApp({ session }) {
     return m;
   }, [daySales]);
   const dayTotal = daySales.reduce((s, x) => s + x.total, 0);
-
+ 
   /* ---------- progreso semana / mes ---------- */
   const [progView, setProgView] = useState("semana");
   const [weekStart, setWeekStart] = useState(weekStartOf(new Date()));
@@ -446,7 +450,7 @@ function CajaApp({ session }) {
     sales.filter((s) => weekChart.some((d) => d.iso === s.date)).forEach((s) => (m[s.method] = (m[s.method] || 0) + s.total));
     return m;
   }, [sales, weekChart]);
-
+ 
   const [monthCursor, setMonthCursor] = useState({ y: new Date().getFullYear(), m: new Date().getMonth() });
   const monthWeeks = useMemo(() => {
     const lastDay = new Date(monthCursor.y, monthCursor.m + 1, 0).getDate();
@@ -470,7 +474,7 @@ function CajaApp({ session }) {
       .forEach((s) => (m[s.method] = (m[s.method] || 0) + s.total));
     return m;
   }, [sales, monthCursor]);
-
+ 
   const pendingCount = pending.length;
   const TABS = [
     { id: "vender", label: "Vender", icon: ShoppingCart },
@@ -479,40 +483,40 @@ function CajaApp({ session }) {
     { id: "progreso", label: "Progreso", icon: TrendingUp },
     { id: "productos", label: "Productos", icon: Package },
   ];
-
+ 
   if (loading) {
     return (
       <div style={{ background: C.bg, minHeight: "100vh" }} className="flex items-center justify-center">
-        <span style={{ color: C.goldDark, fontFamily: "'JetBrains Mono', monospace" }}>Cargando caja…</span>
+        <span style={{ color: C.goldDark, fontFamily: "'Inter', sans-serif" }}>Cargando caja…</span>
       </div>
     );
   }
-
+ 
   return (
-    <div style={{ background: C.bg, minHeight: "100vh", fontFamily: "Manrope, sans-serif" }}>
+    <div style={{ background: C.bg, height: "100vh", fontFamily: "Inter, sans-serif" }} className="flex flex-col">
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Manrope:wght@400;600;700;800&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
         input[type="date"] { color-scheme: light; }
       `}</style>
-
+ 
       {/* barra superior */}
-      <div style={{ background: C.header }}>
-        <div className="max-w-5xl mx-auto px-6 py-3 flex items-center justify-between">
+      <div style={{ background: C.header, borderBottom: `1px solid ${C.border}` }} className="shrink-0">
+        <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Coffee size={20} color="#FFFFFF" />
-            <span style={{ color: "#FFFFFF", fontFamily: "'JetBrains Mono', monospace", fontWeight: 700, letterSpacing: "0.06em" }} className="text-lg">
+            <Coffee size={18} color={C.ink} strokeWidth={1.5} />
+            <span style={{ color: C.ink, fontFamily: "'Inter', sans-serif", fontWeight: 600, letterSpacing: "0.02em" }} className="text-base">
               NeoMarketing
             </span>
           </div>
-          <button onClick={() => supabase.auth.signOut()} style={{ color: "#FFFFFF" }} className="flex items-center gap-1 text-sm">
-            <LogOut size={16} /> Cerrar sesión
+          <button onClick={() => supabase.auth.signOut()} style={{ color: C.inkDim, fontFamily: "'Inter', sans-serif" }} className="flex items-center gap-1.5 text-sm">
+            <LogOut size={15} strokeWidth={1.5} /> Cerrar sesión
           </button>
         </div>
       </div>
-
+ 
       {/* pestañas de navegación */}
-      <div style={{ background: C.paper, borderBottom: `1px solid ${C.border}` }}>
-        <div className="max-w-5xl mx-auto px-6 flex gap-1 overflow-x-auto">
+      <div style={{ background: C.paper, borderBottom: `1px solid ${C.border}` }} className="shrink-0">
+        <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 flex gap-1 overflow-x-auto">
           {TABS.map((t) => {
             const Icon = t.icon;
             const active = tab === t.id;
@@ -544,14 +548,14 @@ function CajaApp({ session }) {
           })}
         </div>
       </div>
-
+ 
       {error && (
-        <div className="max-w-5xl mx-auto px-6 pt-3">
+        <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-3 shrink-0">
           <p className="text-sm" style={{ color: C.danger }}>{error}</p>
         </div>
       )}
-
-      <div className="max-w-5xl mx-auto px-6 py-6">
+ 
+      <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-1 overflow-y-auto min-h-0">
         {tab === "vender" && (
           <VenderTab
             products={products} cart={cart} addToCart={addToCart} decFromCart={decFromCart}
@@ -591,7 +595,7 @@ function CajaApp({ session }) {
     </div>
   );
 }
-
+ 
 /* ================= VENDER ================= */
 function VenderTab({
   products, cart, addToCart, decFromCart, removeFromCart, cartTotal, method, setMethod,
@@ -599,16 +603,16 @@ function VenderTab({
   tables, selectedTable, setSelectedTable, cashReceived, setCashReceived, pauseSale,
 }) {
   const [query, setQuery] = useState("");
-
+ 
   const filtered = useMemo(() => {
     const q = normalize(query);
     if (!q) return products;
     return products.filter((p) => normalize(p.name).includes(q));
   }, [products, query]);
-
+ 
   const handlePick = (p) => { addToCart(p); setQuery(""); };
   const change = cashReceived ? Number(cashReceived) - cartTotal : 0;
-
+ 
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
       {/* columna izquierda: catálogo, mesa, ítem suelto, cuenta */}
@@ -625,7 +629,7 @@ function VenderTab({
               </button>
             )}
           </div>
-          <div className="mt-2 rounded-lg overflow-hidden" style={{ border: `1px solid ${C.border}`, maxHeight: 240, overflowY: "auto" }}>
+          <div className="mt-2 rounded-md overflow-hidden" style={{ border: `1px solid ${C.border}`, maxHeight: 240, overflowY: "auto" }}>
             {filtered.length === 0 && (
               <p className="text-sm px-3 py-3" style={{ color: C.inkDim }}>
                 {products.length === 0 ? "Agrega productos en la pestaña \"Productos\"." : "Sin resultados para esa búsqueda."}
@@ -639,12 +643,12 @@ function VenderTab({
                 style={{ borderBottom: idx < filtered.length - 1 ? `1px solid ${C.border}` : "none", background: "#FFFFFF" }}
               >
                 <span className="text-sm" style={{ color: C.ink }}>{p.name}</span>
-                <span className="text-xs font-bold" style={{ color: C.goldDark, fontFamily: "'JetBrains Mono', monospace" }}>{fmt(p.price)}</span>
+                <span className="text-xs font-semibold" style={{ color: C.goldDark, fontFamily: "'Inter', sans-serif" }}>{fmt(p.price)}</span>
               </button>
             ))}
           </div>
         </Card>
-
+ 
         <Card>
           <SectionLabel>Mesa</SectionLabel>
           <div className="flex flex-wrap gap-2 mt-2">
@@ -655,7 +659,7 @@ function VenderTab({
             {tables.length === 0 && <p className="text-xs self-center" style={{ color: C.inkDim }}>Agrega mesas en la pestaña "Productos".</p>}
           </div>
         </Card>
-
+ 
         <Card>
           <SectionLabel>Ítem suelto</SectionLabel>
           <div className="flex gap-2 mt-2">
@@ -672,7 +676,7 @@ function VenderTab({
             </button>
           </div>
         </Card>
-
+ 
         <Card>
           <SectionLabel>Cuenta</SectionLabel>
           <div className="mt-2" style={{ minHeight: 60 }}>
@@ -681,7 +685,7 @@ function VenderTab({
               <div key={i.id} className="flex items-center justify-between py-2" style={{ borderBottom: `1px solid ${C.border}` }}>
                 <div className="text-sm" style={{ color: C.ink }}>{i.name} <span style={{ color: C.inkDim }}>x{i.qty}</span></div>
                 <div className="flex items-center gap-3">
-                  <span className="text-sm font-bold" style={{ color: C.ink, fontFamily: "'JetBrains Mono', monospace" }}>{fmt(i.price * i.qty)}</span>
+                  <span className="text-sm font-semibold" style={{ color: C.ink, fontFamily: "'Inter', sans-serif" }}>{fmt(i.price * i.qty)}</span>
                   <button onClick={() => decFromCart(i.id)} style={{ color: C.inkDim }}>−</button>
                   <button onClick={() => removeFromCart(i.id)} style={{ color: C.danger }}><X size={14} /></button>
                 </div>
@@ -690,7 +694,7 @@ function VenderTab({
           </div>
         </Card>
       </div>
-
+ 
       {/* columna derecha: información de venta */}
       <div className="md:col-span-1">
         <div className="flex flex-col gap-4 sticky top-4">
@@ -700,7 +704,7 @@ function VenderTab({
               <VFD label="Total cuenta" value={cartTotal} tone="accent" />
             </div>
           </Card>
-
+ 
           <Card>
             <SectionLabel>Pago</SectionLabel>
             <div className="grid grid-cols-2 gap-2 mt-2">
@@ -712,7 +716,7 @@ function VenderTab({
               ))}
             </div>
           </Card>
-
+ 
           <Card>
             <SectionLabel>Pago recibido</SectionLabel>
             <input placeholder="¿Cuánto dio el cliente?" inputMode="numeric" value={cashReceived}
@@ -722,12 +726,12 @@ function VenderTab({
               <div className="mt-2"><VFD label={change < 0 ? "Falta" : "Vueltas"} value={Math.abs(change)} tone={change < 0 ? "danger" : "accent"} /></div>
             )}
           </Card>
-
+ 
           <div className="flex flex-col gap-2">
-            <button onClick={registerSale} className="py-3 rounded-lg font-bold" style={{ background: C.gold, color: "#FFFFFF" }}>
+            <button onClick={registerSale} className="py-3 rounded-md font-semibold" style={{ background: C.gold, color: "#FFFFFF" }}>
               Registrar venta
             </button>
-            <button onClick={pauseSale} className="py-3 rounded-lg font-bold" style={{ background: "#FFFFFF", color: C.ink, border: `1px solid ${C.border}` }}>
+            <button onClick={pauseSale} className="py-3 rounded-md font-semibold" style={{ background: "#FFFFFF", color: C.ink, border: `1px solid ${C.border}` }}>
               Pausar
             </button>
             {saleMsg && <p className="text-center text-sm" style={{ color: saleMsg.includes("✓") ? C.goldDark : C.danger }}>{saleMsg}</p>}
@@ -737,7 +741,7 @@ function VenderTab({
     </div>
   );
 }
-
+ 
 /* ================= PAUSADAS ================= */
 function PausadasTab({ pending, resumePending, deletePending }) {
   return (
@@ -757,12 +761,12 @@ function PausadasTab({ pending, resumePending, deletePending }) {
                 <div className="text-sm mt-1" style={{ color: C.ink }}>
                   {p.cart.map((i) => `${i.name} x${i.qty}`).join(", ")}
                 </div>
-                <div className="text-sm mt-1 font-bold" style={{ color: C.goldDark, fontFamily: "'JetBrains Mono', monospace" }}>
+                <div className="text-sm mt-1 font-semibold" style={{ color: C.goldDark, fontFamily: "'Inter', sans-serif" }}>
                   {fmt(p.cart.reduce((s, i) => s + i.price * i.qty, 0))}
                 </div>
               </div>
               <div className="flex flex-col gap-2 items-end shrink-0">
-                <button onClick={() => resumePending(p.id)} className="flex items-center gap-1 px-3 py-1.5 text-xs rounded font-bold" style={{ background: C.gold, color: "#FFFFFF" }}>
+                <button onClick={() => resumePending(p.id)} className="flex items-center gap-1 px-3 py-1.5 text-xs rounded font-semibold" style={{ background: C.gold, color: "#FFFFFF" }}>
                   <PlayCircle size={12} /> Retomar
                 </button>
                 <button onClick={() => deletePending(p.id)} style={{ color: C.danger }}><Trash2 size={14} /></button>
@@ -774,7 +778,7 @@ function PausadasTab({ pending, resumePending, deletePending }) {
     </div>
   );
 }
-
+ 
 /* ================= CAJA DEL DÍA ================= */
 function CajaTab({
   selDate, setSelDate, daySales, dayByMethod, dayTotal, deleteSale,
@@ -784,15 +788,15 @@ function CajaTab({
   const dayWithdrawals = useMemo(() => withdrawals.filter((w) => w.date === selDate), [withdrawals, selDate]);
   const dayWithdrawalsTotal = dayWithdrawals.reduce((s, w) => s + w.amount, 0);
   const expectedCash = dayBase + (dayByMethod.efectivo || 0) - dayWithdrawalsTotal;
-
+ 
   const [baseInput, setBaseInput] = useState(dayBase ? String(dayBase) : "");
   const [wDesc, setWDesc] = useState("");
   const [wAmount, setWAmount] = useState("");
-
+ 
   useEffect(() => {
     setBaseInput(dayBase ? String(dayBase) : "");
   }, [selDate, dayBase]);
-
+ 
   return (
     <div className="flex flex-col gap-5">
       <Card>
@@ -802,7 +806,7 @@ function CajaTab({
             className="ml-auto px-2 py-1 text-sm rounded" style={{ background: "#FFFFFF", color: C.ink, border: `1px solid ${C.border}` }} />
         </div>
       </Card>
-
+ 
       <Card>
         <SectionLabel>Base de caja (efectivo inicial)</SectionLabel>
         <div className="flex gap-2 mt-2">
@@ -816,19 +820,19 @@ function CajaTab({
           />
           <button
             onClick={() => setCashBase(selDate, baseInput)}
-            className="px-3 rounded font-bold"
+            className="px-3 rounded font-semibold"
             style={{ background: C.gold, color: "#FFFFFF" }}
           >
             Guardar
           </button>
         </div>
       </Card>
-
+ 
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         {METHODS.map((m) => <VFD key={m.id} label={m.label} value={dayByMethod[m.id] || 0} small />)}
       </div>
       <VFD label="Total del día" value={dayTotal} tone="accent" />
-
+ 
       <Card>
         <SectionLabel>Retiros de caja</SectionLabel>
         <div className="flex gap-2 mt-2">
@@ -852,16 +856,16 @@ function CajaTab({
                 <div className="text-sm" style={{ color: C.ink }}>{w.description}</div>
               </div>
               <div className="flex items-center gap-3">
-                <span className="text-sm font-bold" style={{ color: C.danger, fontFamily: "'JetBrains Mono', monospace" }}>-{fmt(w.amount)}</span>
+                <span className="text-sm font-semibold" style={{ color: C.danger, fontFamily: "'Inter', sans-serif" }}>-{fmt(w.amount)}</span>
                 <button onClick={() => deleteWithdrawal(w.id)} style={{ color: C.danger }}><Trash2 size={14} /></button>
               </div>
             </div>
           ))}
         </div>
       </Card>
-
+ 
       <VFD label="Efectivo esperado en caja" value={expectedCash} tone="accent" />
-
+ 
       <Card>
         <SectionLabel>Transacciones</SectionLabel>
         <div className="mt-3 flex flex-col gap-3">
@@ -875,13 +879,13 @@ function CajaTab({
                 </div>
                 <div className="text-sm mt-1" style={{ color: C.ink }}>{s.items.map((i) => `${i.name} x${i.qty}`).join(", ")}</div>
                 {s.cashReceived != null && (
-                  <div className="text-xs mt-1" style={{ color: C.inkDim, fontFamily: "'JetBrains Mono', monospace" }}>
+                  <div className="text-xs mt-1" style={{ color: C.inkDim, fontFamily: "'Inter', sans-serif" }}>
                     Recibió {fmt(s.cashReceived)} · {s.change < 0 ? `Faltó ${fmt(Math.abs(s.change))}` : `Vueltas ${fmt(s.change)}`}
                   </div>
                 )}
               </div>
               <div className="flex flex-col items-end gap-1">
-                <span className="text-sm font-bold" style={{ color: C.ink, fontFamily: "'JetBrains Mono', monospace" }}>{fmt(s.total)}</span>
+                <span className="text-sm font-semibold" style={{ color: C.ink, fontFamily: "'Inter', sans-serif" }}>{fmt(s.total)}</span>
                 <button onClick={() => deleteSale(s.id)} style={{ color: C.danger }}><Trash2 size={14} /></button>
               </div>
             </div>
@@ -891,7 +895,7 @@ function CajaTab({
     </div>
   );
 }
-
+ 
 /* ================= PROGRESO ================= */
 function ProgresoTab(props) {
   const { progView, setProgView, weekStart, setWeekStart, weekChart, weekTotal, weekByMethod, monthCursor, setMonthCursor, monthWeeks, monthTotal, monthByMethod } = props;
@@ -927,7 +931,7 @@ function ProgresoTab(props) {
     </div>
   );
 }
-
+ 
 function ChartCard({ data }) {
   return (
     <Card style={{ height: 220 }}>
@@ -945,7 +949,7 @@ function ChartCard({ data }) {
     </Card>
   );
 }
-
+ 
 function MethodBreakdown({ byMethod }) {
   return (
     <div>
@@ -956,7 +960,7 @@ function MethodBreakdown({ byMethod }) {
     </div>
   );
 }
-
+ 
 /* ================= PRODUCTOS ================= */
 function ProductosTab({ products, addProduct, editProduct, deleteProduct, tables, addTable, editTable, deleteTable }) {
   const [name, setName] = useState("");
@@ -964,11 +968,11 @@ function ProductosTab({ products, addProduct, editProduct, deleteProduct, tables
   const [editingId, setEditingId] = useState(null);
   const [editName, setEditName] = useState("");
   const [editPrice, setEditPrice] = useState("");
-
+ 
   const [tableName, setTableName] = useState("");
   const [editingTableId, setEditingTableId] = useState(null);
   const [editTableName, setEditTableName] = useState("");
-
+ 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
       <div className="flex flex-col gap-4">
@@ -985,7 +989,7 @@ function ProductosTab({ products, addProduct, editProduct, deleteProduct, tables
             </button>
           </div>
         </Card>
-
+ 
         <Card>
           <SectionLabel>Catálogo</SectionLabel>
           <div className="mt-2 flex flex-col gap-2">
@@ -1004,7 +1008,7 @@ function ProductosTab({ products, addProduct, editProduct, deleteProduct, tables
                   <>
                     <div>
                       <div className="text-sm" style={{ color: C.ink }}>{p.name}</div>
-                      <div className="text-xs" style={{ color: C.inkDim, fontFamily: "'JetBrains Mono', monospace" }}>{fmt(p.price)}</div>
+                      <div className="text-xs" style={{ color: C.inkDim, fontFamily: "'Inter', sans-serif" }}>{fmt(p.price)}</div>
                     </div>
                     <div className="flex gap-3">
                       <button onClick={() => { setEditingId(p.id); setEditName(p.name); setEditPrice(String(p.price)); }} style={{ color: C.inkDim }}><Pencil size={14} /></button>
@@ -1017,7 +1021,7 @@ function ProductosTab({ products, addProduct, editProduct, deleteProduct, tables
           </div>
         </Card>
       </div>
-
+ 
       <div className="flex flex-col gap-4">
         <Card>
           <SectionLabel>Mesas</SectionLabel>
