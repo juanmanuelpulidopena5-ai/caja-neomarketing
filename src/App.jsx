@@ -37,6 +37,17 @@ const methodLabel = (id) => METHODS.find((m) => m.id === id)?.label || id;
 const fmt = (n) =>
   new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(n || 0);
  
+/* Contenedor centrado y fluido: el ancho se ajusta solo al tamaño de la ventana,
+   sin depender de que las clases de Tailwind (max-w/mx-auto) se apliquen. */
+const containerStyle = (extra = {}) => ({
+  width: "100%",
+  maxWidth: 1120,
+  margin: "0 auto",
+  boxSizing: "border-box",
+  padding: "0 clamp(16px, 4vw, 40px)",
+  ...extra,
+});
+ 
 const normalize = (s) =>
   (s || "").toString().normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
  
@@ -177,7 +188,7 @@ function LoginScreen() {
   return (
     <div style={{ background: C.bg, minHeight: "100vh", fontFamily: "Inter, sans-serif" }} className="flex items-center justify-center px-5">
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');`}</style>
-      <div className="w-full max-w-sm rounded-md p-6" style={{ background: C.paper, border: `1px solid ${C.border}` }}>
+      <div className="w-full rounded-md p-6" style={{ background: C.paper, border: `1px solid ${C.border}`, maxWidth: 384, boxSizing: "border-box" }}>
         <div className="flex items-center gap-2 justify-center mb-6">
           <Coffee size={20} color={C.ink} strokeWidth={1.5} />
           <span style={{ color: C.ink, fontFamily: "'Inter', sans-serif", fontWeight: 600, letterSpacing: "0.02em" }} className="text-base">
@@ -493,15 +504,15 @@ function CajaApp({ session }) {
   }
  
   return (
-    <div style={{ background: C.bg, height: "100vh", fontFamily: "Inter, sans-serif" }} className="flex flex-col">
+    <div style={{ background: C.bg, height: "100vh", display: "flex", flexDirection: "column", overflow: "hidden", fontFamily: "Inter, sans-serif" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
         input[type="date"] { color-scheme: light; }
       `}</style>
  
       {/* barra superior */}
-      <div style={{ background: C.header, borderBottom: `1px solid ${C.border}` }} className="shrink-0">
-        <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
+      <div style={{ background: C.header, borderBottom: `1px solid ${C.border}`, flexShrink: 0 }}>
+        <div style={containerStyle({ paddingTop: 16, paddingBottom: 16 })} className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Coffee size={18} color={C.ink} strokeWidth={1.5} />
             <span style={{ color: C.ink, fontFamily: "'Inter', sans-serif", fontWeight: 600, letterSpacing: "0.02em" }} className="text-base">
@@ -515,8 +526,8 @@ function CajaApp({ session }) {
       </div>
  
       {/* pestañas de navegación */}
-      <div style={{ background: C.paper, borderBottom: `1px solid ${C.border}` }} className="shrink-0">
-        <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 flex gap-1 overflow-x-auto">
+      <div style={{ background: C.paper, borderBottom: `1px solid ${C.border}`, flexShrink: 0 }}>
+        <div style={containerStyle()} className="flex gap-1 overflow-x-auto">
           {TABS.map((t) => {
             const Icon = t.icon;
             const active = tab === t.id;
@@ -550,12 +561,15 @@ function CajaApp({ session }) {
       </div>
  
       {error && (
-        <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-3 shrink-0">
-          <p className="text-sm" style={{ color: C.danger }}>{error}</p>
+        <div style={{ flexShrink: 0 }}>
+          <div style={containerStyle({ paddingTop: 12 })}>
+            <p className="text-sm" style={{ color: C.danger }}>{error}</p>
+          </div>
         </div>
       )}
  
-      <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-1 overflow-y-auto min-h-0">
+      <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
+        <div style={containerStyle({ paddingTop: 24, paddingBottom: 24 })}>
         {tab === "vender" && (
           <VenderTab
             products={products} cart={cart} addToCart={addToCart} decFromCart={decFromCart}
@@ -591,6 +605,7 @@ function CajaApp({ session }) {
             tables={tables} addTable={addTable} editTable={editTable} deleteTable={deleteTable}
           />
         )}
+        </div>
       </div>
     </div>
   );
@@ -614,9 +629,9 @@ function VenderTab({
   const change = cashReceived ? Number(cashReceived) - cartTotal : 0;
  
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 24 }}>
       {/* columna izquierda: catálogo, mesa, ítem suelto, cuenta */}
-      <div className="md:col-span-2 flex flex-col gap-5">
+      <div style={{ flex: "2 1 380px", minWidth: 0 }} className="flex flex-col gap-5">
         <Card>
           <SectionLabel>Buscar producto</SectionLabel>
           <div className="relative mt-2">
@@ -696,7 +711,7 @@ function VenderTab({
       </div>
  
       {/* columna derecha: información de venta */}
-      <div className="md:col-span-1">
+      <div style={{ flex: "1 1 300px", minWidth: 0 }}>
         <div className="flex flex-col gap-4 sticky top-4">
           <Card>
             <SectionLabel>Información de venta</SectionLabel>
@@ -707,7 +722,7 @@ function VenderTab({
  
           <Card>
             <SectionLabel>Pago</SectionLabel>
-            <div className="grid grid-cols-2 gap-2 mt-2">
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8, marginTop: 8 }}>
               {METHODS.map((m) => (
                 <KeyBtn key={m.id} onClick={() => setMethod(m.id)} active={method === m.id}
                   style={{ padding: "10px 8px", borderColor: method === m.id ? m.color : C.border }}>
@@ -828,7 +843,7 @@ function CajaTab({
         </div>
       </Card>
  
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12 }}>
         {METHODS.map((m) => <VFD key={m.id} label={m.label} value={dayByMethod[m.id] || 0} small />)}
       </div>
       <VFD label="Total del día" value={dayTotal} tone="accent" />
@@ -954,7 +969,7 @@ function MethodBreakdown({ byMethod }) {
   return (
     <div>
       <SectionLabel>Por método de pago</SectionLabel>
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mt-2">
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12, marginTop: 8 }}>
         {METHODS.map((m) => <VFD key={m.id} label={m.label} value={byMethod[m.id] || 0} small />)}
       </div>
     </div>
@@ -974,8 +989,8 @@ function ProductosTab({ products, addProduct, editProduct, deleteProduct, tables
   const [editTableName, setEditTableName] = useState("");
  
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-      <div className="flex flex-col gap-4">
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 24 }}>
+      <div style={{ flex: "1 1 320px", minWidth: 0 }} className="flex flex-col gap-4">
         <Card>
           <SectionLabel>Nuevo producto</SectionLabel>
           <div className="flex gap-2 mt-2">
@@ -1022,7 +1037,7 @@ function ProductosTab({ products, addProduct, editProduct, deleteProduct, tables
         </Card>
       </div>
  
-      <div className="flex flex-col gap-4">
+      <div style={{ flex: "1 1 320px", minWidth: 0 }} className="flex flex-col gap-4">
         <Card>
           <SectionLabel>Mesas</SectionLabel>
           <div className="flex gap-2 mt-2">
