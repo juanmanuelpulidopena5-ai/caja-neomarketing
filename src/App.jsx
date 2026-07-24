@@ -6,12 +6,13 @@ import {
 import {
   Plus, Trash2, ShoppingCart, CalendarDays, TrendingUp, Package,
   ChevronLeft, ChevronRight, X, Coffee, Pencil, Check, Search, Clock, PlayCircle, LogOut,
+  Ban, Printer,
 } from "lucide-react";
  
 /* ---------- paleta / tokens (tema claro, sin efectos LED) ---------- */
 const C = {
   bg: "#FAFAFA",
-  header: "#FFFFFF",
+  header: "#ffffff",
   headerDark: "#111111",
   paper: "#FFFFFF",
   border: "#E8E8E8",
@@ -132,6 +133,40 @@ function Card({ children, style }) {
     </div>
   );
 }
+
+/* Ticket de impresión genérico, tipo POS. Solo es visible cuando se imprime (ver @media print). */
+function PrintTicket({ sale, businessName = "NeoMarketing" }) {
+  if (!sale) return null;
+  return (
+    <div id="print-ticket" style={{ fontFamily: "'Inter', monospace", fontSize: 12, color: "#000", padding: "8px 4px" }}>
+      <div style={{ textAlign: "center", fontWeight: 700, fontSize: 14 }}>{businessName}</div>
+      <div style={{ textAlign: "center" }}>{sale.date} · {sale.time}</div>
+      {sale.tableName && <div style={{ textAlign: "center" }}>{sale.tableName}</div>}
+      <hr style={{ border: "none", borderTop: "1px dashed #000", margin: "6px 0" }} />
+      {sale.items.map((it, idx) => (
+        <div key={idx} style={{ display: "flex", justifyContent: "space-between" }}>
+          <span>{it.qty} x {it.name}</span>
+          <span>{fmt(it.price * it.qty)}</span>
+        </div>
+      ))}
+      <hr style={{ border: "none", borderTop: "1px dashed #000", margin: "6px 0" }} />
+      <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700 }}>
+        <span>TOTAL</span><span>{fmt(sale.total)}</span>
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between" }}>
+        <span>Pago</span><span>{methodLabel(sale.method)}</span>
+      </div>
+      {sale.cashReceived != null && (
+        <>
+          <div style={{ display: "flex", justifyContent: "space-between" }}><span>Recibido</span><span>{fmt(sale.cashReceived)}</span></div>
+          <div style={{ display: "flex", justifyContent: "space-between" }}><span>Vueltas</span><span>{fmt(sale.change)}</span></div>
+        </>
+      )}
+      {sale.anulada && <div style={{ textAlign: "center", marginTop: 6, fontWeight: 700 }}>*** ANULADA ***</div>}
+      <div style={{ textAlign: "center", marginTop: 10 }}>¡Gracias por su compra!</div>
+    </div>
+  );
+}
  
 /* ================= APP RAÍZ: maneja sesión ================= */
 export default function CajaRoot() {
@@ -230,7 +265,15 @@ function CajaApp({ session }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [tab, setTab] = useState("vender");
- 
+  const [ticket, setTicket] = useState(null); // venta que se está imprimiendo
+
+  const printSale = (sale) => setTicket(sale);
+  useEffect(() => {
+    if (!ticket) return;
+    const id = setTimeout(() => window.print(), 60); // deja pintar el DOM antes de imprimir
+    return () => clearTimeout(id);
+  }, [ticket]);
+
   const loadAll = useCallback(async () => {
     try {
       const [p, t, s, pe, cb, wd] = await Promise.all([
@@ -262,6 +305,7 @@ function CajaApp({ session }) {
         tableName: r.table_name,
         cashReceived: r.cash_received != null ? Number(r.cash_received) : null,
         change: r.change != null ? Number(r.change) : null,
+        anulada: !!r.anulada,
       })));
       setPending((pe.data || []).map((r) => ({
         id: r.id,
@@ -365,8 +409,8 @@ function CajaApp({ session }) {
     loadAll();
   };
  
-  const deleteSale = async (id) => {
-    const { error: e } = await supabase.from("sales").delete().eq("id", id);
+  const anularVenta = async (id) => {
+    const { error: e } = await supabase.from("sales").update({ anulada: true }).eq("id", id);
     if (!e) loadAll();
   };
  
@@ -437,12 +481,13 @@ function CajaApp({ session }) {
   /* ---------- caja del día ---------- */
   const [selDate, setSelDate] = useState(toISO(new Date()));
   const daySales = useMemo(() => sales.filter((s) => s.date === selDate), [sales, selDate]);
+  const dayActiveSales = useMemo(() => daySales.filter((s) => !s.anulada), [daySales]);
   const dayByMethod = useMemo(() => {
     const m = {}; METHODS.forEach((mm) => (m[mm.id] = 0));
-    daySales.forEach((s) => (m[s.method] = (m[s.method] || 0) + s.total));
+    dayActiveSales.forEach((s) => (m[s.method] = (m[s.method] || 0) + s.total));
     return m;
-  }, [daySales]);
-  const dayTotal = daySales.reduce((s, x) => s + x.total, 0);
+  }, [dayActiveSales]);
+  const dayTotal = dayActiveSales.reduce((s, x) => s + x.total, 0);
  
   /* ---------- progreso semana / mes ---------- */
   const [progView, setProgView] = useState("semana");
@@ -451,14 +496,14 @@ function CajaApp({ session }) {
   const weekChart = useMemo(
     () => weekDays.map((d, i) => {
       const iso = toISO(d);
-      const total = sales.filter((s) => s.date === iso).reduce((s, x) => s + x.total, 0);
+      const total = sales.filter((s) => s.date === iso && !s.anulada).reduce((s, x) => s + x.total, 0);
       return { label: DIAS[i], total, iso };
     }), [weekDays, sales]
   );
   const weekTotal = weekChart.reduce((s, d) => s + d.total, 0);
   const weekByMethod = useMemo(() => {
     const m = {}; METHODS.forEach((mm) => (m[mm.id] = 0));
-    sales.filter((s) => weekChart.some((d) => d.iso === s.date)).forEach((s) => (m[s.method] = (m[s.method] || 0) + s.total));
+    sales.filter((s) => weekChart.some((d) => d.iso === s.date) && !s.anulada).forEach((s) => (m[s.method] = (m[s.method] || 0) + s.total));
     return m;
   }, [sales, weekChart]);
  
@@ -472,7 +517,7 @@ function CajaApp({ session }) {
     }
     return weeks.map((w) => {
       const total = sales
-        .filter((s) => { const d = parseISO(s.date); return d.getFullYear() === monthCursor.y && d.getMonth() === monthCursor.m && d.getDate() >= w.start && d.getDate() <= w.end; })
+        .filter((s) => { const d = parseISO(s.date); return !s.anulada && d.getFullYear() === monthCursor.y && d.getMonth() === monthCursor.m && d.getDate() >= w.start && d.getDate() <= w.end; })
         .reduce((s, x) => s + x.total, 0);
       return { ...w, total };
     });
@@ -481,7 +526,7 @@ function CajaApp({ session }) {
   const monthByMethod = useMemo(() => {
     const m = {}; METHODS.forEach((mm) => (m[mm.id] = 0));
     sales
-      .filter((s) => { const d = parseISO(s.date); return d.getFullYear() === monthCursor.y && d.getMonth() === monthCursor.m; })
+      .filter((s) => { const d = parseISO(s.date); return !s.anulada && d.getFullYear() === monthCursor.y && d.getMonth() === monthCursor.m; })
       .forEach((s) => (m[s.method] = (m[s.method] || 0) + s.total));
     return m;
   }, [sales, monthCursor]);
@@ -508,6 +553,15 @@ function CajaApp({ session }) {
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
         input[type="date"] { color-scheme: light; }
+
+        @media print {
+          body * { visibility: hidden; }
+          #print-ticket, #print-ticket * { visibility: visible; }
+          #print-ticket { position: absolute; top: 0; left: 0; width: 80mm; }
+        }
+        @media screen {
+          #print-ticket { display: none; }
+        }
       `}</style>
  
       {/* barra superior */}
@@ -587,7 +641,7 @@ function CajaApp({ session }) {
         {tab === "caja" && (
           <CajaTab
             selDate={selDate} setSelDate={setSelDate} daySales={daySales} dayByMethod={dayByMethod}
-            dayTotal={dayTotal} deleteSale={deleteSale}
+            dayTotal={dayTotal} anularVenta={anularVenta} onPrintSale={printSale}
             cashBases={cashBases} withdrawals={withdrawals}
             setCashBase={setCashBase} addWithdrawal={addWithdrawal} deleteWithdrawal={deleteWithdrawal}
           />
@@ -607,6 +661,7 @@ function CajaApp({ session }) {
         )}
         </div>
       </div>
+      <PrintTicket sale={ticket} />
     </div>
   );
 }
@@ -796,7 +851,7 @@ function PausadasTab({ pending, resumePending, deletePending }) {
  
 /* ================= CAJA DEL DÍA ================= */
 function CajaTab({
-  selDate, setSelDate, daySales, dayByMethod, dayTotal, deleteSale,
+  selDate, setSelDate, daySales, dayByMethod, dayTotal, anularVenta, onPrintSale,
   cashBases, withdrawals, setCashBase, addWithdrawal, deleteWithdrawal,
 }) {
   const dayBase = cashBases.find((cb) => cb.date === selDate)?.amount || 0;
@@ -886,13 +941,16 @@ function CajaTab({
         <div className="mt-3 flex flex-col gap-3">
           {daySales.length === 0 && <p className="text-sm" style={{ color: C.inkDim }}>No hay ventas registradas este día.</p>}
           {daySales.slice().reverse().map((s) => (
-            <div key={s.id} className="flex justify-between items-start pb-3" style={{ borderBottom: `1px solid ${C.border}` }}>
+            <div key={s.id} className="flex justify-between items-start pb-3" style={{ borderBottom: `1px solid ${C.border}`, opacity: s.anulada ? 0.55 : 1 }}>
               <div>
                 <div className="text-xs" style={{ color: C.inkDim }}>
                   {s.time} · <span style={{ color: methodColor(s.method) }}>{methodLabel(s.method)}</span>
                   {s.tableName ? ` · ${s.tableName}` : ""}
+                  {s.anulada && <span className="ml-2 font-semibold" style={{ color: C.danger }}>· ANULADA</span>}
                 </div>
-                <div className="text-sm mt-1" style={{ color: C.ink }}>{s.items.map((i) => `${i.name} x${i.qty}`).join(", ")}</div>
+                <div className="text-sm mt-1" style={{ color: s.anulada ? C.inkDim : C.ink, textDecoration: s.anulada ? "line-through" : "none" }}>
+                  {s.items.map((i) => `${i.name} x${i.qty}`).join(", ")}
+                </div>
                 {s.cashReceived != null && (
                   <div className="text-xs mt-1" style={{ color: C.inkDim, fontFamily: "'Inter', sans-serif" }}>
                     Recibió {fmt(s.cashReceived)} · {s.change < 0 ? `Faltó ${fmt(Math.abs(s.change))}` : `Vueltas ${fmt(s.change)}`}
@@ -900,8 +958,15 @@ function CajaTab({
                 )}
               </div>
               <div className="flex flex-col items-end gap-1">
-                <span className="text-sm font-semibold" style={{ color: C.ink, fontFamily: "'Inter', sans-serif" }}>{fmt(s.total)}</span>
-                <button onClick={() => deleteSale(s.id)} style={{ color: C.danger }}><Trash2 size={14} /></button>
+                <span className="text-sm font-semibold" style={{ color: s.anulada ? C.inkDim : C.ink, textDecoration: s.anulada ? "line-through" : "none", fontFamily: "'Inter', sans-serif" }}>{fmt(s.total)}</span>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => onPrintSale(s)} style={{ color: C.inkDim }} title="Imprimir comprobante"><Printer size={14} /></button>
+                  {!s.anulada && (
+                    <button onClick={() => { if (confirm("¿Anular esta venta? No se borrará, quedará marcada como anulada.")) anularVenta(s.id); }} style={{ color: C.danger }} title="Anular venta">
+                      <Ban size={14} />
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           ))}
@@ -910,7 +975,7 @@ function CajaTab({
     </div>
   );
 }
- 
+
 /* ================= PROGRESO ================= */
 function ProgresoTab(props) {
   const { progView, setProgView, weekStart, setWeekStart, weekChart, weekTotal, weekByMethod, monthCursor, setMonthCursor, monthWeeks, monthTotal, monthByMethod } = props;
