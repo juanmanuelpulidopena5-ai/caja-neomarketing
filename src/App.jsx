@@ -6,7 +6,7 @@ import {
 import {
   Plus, Trash2, ShoppingCart, CalendarDays, TrendingUp, Package,
   ChevronLeft, ChevronRight, X, Coffee, Pencil, Check, Search, Clock, PlayCircle, LogOut,
-  Ban, Printer,
+  Ban, Printer, Download,
 } from "lucide-react";
  
 /* ---------- paleta / tokens (tema claro, sin efectos LED) ---------- */
@@ -651,6 +651,7 @@ function CajaApp({ session }) {
             progView={progView} setProgView={setProgView}
             weekStart={weekStart} setWeekStart={setWeekStart} weekChart={weekChart} weekTotal={weekTotal} weekByMethod={weekByMethod}
             monthCursor={monthCursor} setMonthCursor={setMonthCursor} monthWeeks={monthWeeks} monthTotal={monthTotal} monthByMethod={monthByMethod}
+            sales={sales}
           />
         )}
         {tab === "productos" && (
@@ -976,15 +977,108 @@ function CajaTab({
   );
 }
 
+/* ---------- utilidades para las métricas nuevas de Progreso ---------- */
+
+// Convierte el string de hora guardado (p.ej. "09:41 a.m." o "21:05") a un número 0-23.
+const parseHour24 = (timeStr) => {
+  if (!timeStr) return 0;
+  const match = String(timeStr).match(/(\d{1,2}):(\d{2})\s*([ap]\.?\s*m\.?)?/i);
+  if (!match) return 0;
+  let h = parseInt(match[1], 10);
+  const period = match[3] ? match[3].toLowerCase().replace(/\./g, "").trim() : null;
+  if (period) {
+    if (period.startsWith("p") && h !== 12) h += 12;
+    if (period.startsWith("a") && h === 12) h = 0;
+  }
+  return ((h % 24) + 24) % 24;
+};
+
+// Arma y dispara la descarga de un CSV a partir de las ventas activas (no anuladas).
+const downloadSalesCSV = (salesList, fileTag) => {
+  const header = ["Fecha", "Hora", "Método de pago", "Total", "Items"];
+  const rows = salesList.map((s) => {
+    const itemsStr = (s.items || []).map((it) => `${it.qty}x ${it.name}`).join(" | ");
+    return [s.date, s.time, methodLabel(s.method), s.total, itemsStr];
+  });
+  const escape = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const csv = [header, ...rows].map((r) => r.map(escape).join(",")).join("\r\n");
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `ventas_${fileTag}_${toISO(new Date())}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+};
+
 /* ================= PROGRESO ================= */
 function ProgresoTab(props) {
-  const { progView, setProgView, weekStart, setWeekStart, weekChart, weekTotal, weekByMethod, monthCursor, setMonthCursor, monthWeeks, monthTotal, monthByMethod } = props;
+  const {
+    progView, setProgView, weekStart, setWeekStart, weekChart, weekTotal, weekByMethod,
+    monthCursor, setMonthCursor, monthWeeks, monthTotal, monthByMethod, sales,
+  } = props;
+
+  const [hourMetric, setHourMetric] = useState("total"); // "total" (ingresos) o "count" (cantidad)
+
+  // Ventas activas (no anuladas) que caen dentro del periodo seleccionado (semana o mes).
+  const filteredSales = useMemo(() => {
+    const list = sales || [];
+    if (progView === "semana") {
+      const isos = new Set(weekChart.map((d) => d.iso));
+      return list.filter((s) => !s.anulada && isos.has(s.date));
+    }
+    return list.filter((s) => {
+      if (s.anulada) return false;
+      const d = parseISO(s.date);
+      return d.getFullYear() === monthCursor.y && d.getMonth() === monthCursor.m;
+    });
+  }, [sales, progView, weekChart, monthCursor]);
+
+  // Cantidad y monto vendido por producto dentro del periodo.
+  const productStats = useMemo(() => {
+    const map = {};
+    filteredSales.forEach((s) => {
+      (s.items || []).forEach((it) => {
+        if (!map[it.name]) map[it.name] = { name: it.name, qty: 0, total: 0 };
+        map[it.name].qty += it.qty;
+        map[it.name].total += it.price * it.qty;
+      });
+    });
+    return Object.values(map).sort((a, b) => b.qty - a.qty);
+  }, [filteredSales]);
+
+  const topProduct = productStats[0] || null;
+
+  // Ingresos / cantidad de ventas agrupados por hora del día (00 - 23).
+  const hourlyChart = useMemo(() => {
+    const buckets = Array.from({ length: 24 }, (_, h) => ({ label: `${String(h).padStart(2, "0")}h`, total: 0, count: 0 }));
+    filteredSales.forEach((s) => {
+      const h = parseHour24(s.time);
+      buckets[h].total += s.total;
+      buckets[h].count += 1;
+    });
+    return buckets;
+  }, [filteredSales]);
+
+  const exportCSV = () => downloadSalesCSV(filteredSales, progView);
+
   return (
     <div className="flex flex-col gap-5">
       <div className="grid grid-cols-2 gap-2">
         <KeyBtn active={progView === "semana"} onClick={() => setProgView("semana")} style={{ padding: "8px" }}>Semana</KeyBtn>
         <KeyBtn active={progView === "mes"} onClick={() => setProgView("mes")} style={{ padding: "8px" }}>Mes</KeyBtn>
       </div>
+
+      <button
+        onClick={exportCSV}
+        className="flex items-center justify-center gap-2 py-2 rounded-md text-sm font-semibold"
+        style={{ background: C.gold, color: "#FFFFFF" }}
+      >
+        <Download size={15} /> Exportar CSV ({filteredSales.length} ventas)
+      </button>
+
       {progView === "semana" ? (
         <>
           <div className="flex items-center justify-between">
@@ -1008,6 +1102,97 @@ function ProgresoTab(props) {
           <MethodBreakdown byMethod={monthByMethod} />
         </>
       )}
+
+      <TopProductCard product={topProduct} />
+
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <SectionLabel>Ventas por hora del día</SectionLabel>
+          <div className="flex gap-1">
+            <KeyBtn active={hourMetric === "total"} onClick={() => setHourMetric("total")} style={{ padding: "4px 8px", fontSize: 11 }}>Ingresos</KeyBtn>
+            <KeyBtn active={hourMetric === "count"} onClick={() => setHourMetric("count")} style={{ padding: "4px 8px", fontSize: 11 }}>Cantidad</KeyBtn>
+          </div>
+        </div>
+        <HourlyChart data={hourlyChart} metric={hourMetric} />
+      </div>
+
+      <ProductSalesTable stats={productStats} />
+    </div>
+  );
+}
+
+/* Tarjeta con el producto más vendido (en unidades) del periodo seleccionado. */
+function TopProductCard({ product }) {
+  return (
+    <div className="rounded-md px-3 py-2 flex flex-col" style={{ background: C.paper, border: `1px solid ${C.border}` }}>
+      <span className="text-[10px] uppercase tracking-wide mb-1" style={{ color: C.inkDim, fontFamily: "Inter, sans-serif", fontWeight: 600 }}>
+        Producto más vendido
+      </span>
+      {product ? (
+        <div className="flex items-baseline justify-between">
+          <span className="text-base" style={{ color: C.ink, fontFamily: "'Inter', sans-serif", fontWeight: 700 }}>
+            {product.name}
+          </span>
+          <span className="text-sm" style={{ color: C.goldDark, fontFamily: "'Inter', sans-serif", fontWeight: 700, fontVariantNumeric: "tabular-nums" }}>
+            {product.qty} u. · {fmt(product.total)}
+          </span>
+        </div>
+      ) : (
+        <span className="text-sm" style={{ color: C.inkDim, fontFamily: "'Inter', sans-serif" }}>Sin ventas en este periodo.</span>
+      )}
+    </div>
+  );
+}
+
+/* Gráfica de barras de ventas agrupadas por hora (00h - 23h). */
+function HourlyChart({ data, metric }) {
+  return (
+    <Card style={{ height: 220 }}>
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+          <CartesianGrid stroke={C.border} vertical={false} />
+          <XAxis dataKey="label" tick={{ fontSize: 9, fill: C.inkDim }} axisLine={{ stroke: C.border }} tickLine={false} interval={1} />
+          <YAxis hide />
+          <Tooltip
+            formatter={(v) => (metric === "total" ? fmt(v) : `${v} venta(s)`)}
+            contentStyle={{ background: "#FFFFFF", border: `1px solid ${C.border}`, color: C.ink, fontSize: 12 }}
+            labelStyle={{ color: C.ink }}
+          />
+          <Bar dataKey={metric} radius={[4, 4, 0, 0]}>
+            {data.map((_, i) => <Cell key={i} fill={C.gold} />)}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </Card>
+  );
+}
+
+/* Tabla sencilla de unidades / total vendido por producto en el periodo seleccionado. */
+function ProductSalesTable({ stats }) {
+  return (
+    <div>
+      <SectionLabel>Ventas por producto</SectionLabel>
+      <Card style={{ marginTop: 8, padding: 0 }}>
+        <div style={{ maxHeight: 280, overflowY: "auto" }}>
+          {stats.length === 0 ? (
+            <p className="text-sm p-4" style={{ color: C.inkDim }}>No hay ventas en este periodo.</p>
+          ) : (
+            stats.map((p, idx) => (
+              <div
+                key={p.name}
+                className="flex items-center justify-between px-4 py-2"
+                style={{ borderBottom: idx < stats.length - 1 ? `1px solid ${C.border}` : "none" }}
+              >
+                <span className="text-sm" style={{ color: C.ink }}>{p.name}</span>
+                <div className="flex items-center gap-4">
+                  <span className="text-sm font-semibold" style={{ color: C.ink, fontVariantNumeric: "tabular-nums" }}>{p.qty} u.</span>
+                  <span className="text-xs" style={{ color: C.inkDim, fontVariantNumeric: "tabular-nums" }}>{fmt(p.total)}</span>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </Card>
     </div>
   );
 }
