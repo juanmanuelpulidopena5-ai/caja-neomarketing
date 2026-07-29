@@ -23,6 +23,10 @@ const C = {
   goldSoft: "#F2F2F2",
   danger: "#B91C1C",
   dangerSoft: "#F5E9E9",
+  // tokens para diferenciar campos editables (inputs/selects) del texto estático
+  fieldBg: "#F0F0F1",
+  fieldBorder: "#B8B8BC",
+  fieldFocusRing: "rgba(17,17,17,0.18)",
 };
  
 const METHODS = [
@@ -34,6 +38,25 @@ const METHODS = [
 ];
 const methodColor = (id) => METHODS.find((m) => m.id === id)?.color || "#999";
 const methodLabel = (id) => METHODS.find((m) => m.id === id)?.label || id;
+
+/* Unidades de medida disponibles para insumos/materia prima. */
+const UNIT_OPTIONS = [
+  { id: "g", label: "gramos (g)" },
+  { id: "kg", label: "kilogramos (kg)" },
+  { id: "ml", label: "mililitros (ml)" },
+  { id: "l", label: "litros (l)" },
+  { id: "unidad", label: "unidades" },
+];
+const unitLabel = (id) => UNIT_OPTIONS.find((u) => u.id === id)?.label || id;
+
+/* Receta efectiva de un producto tipo "recipe": su propia receta si la personalizó,
+   o si no, la receta base definida en su categoría. */
+const effectiveRecipe = (product, categories) => {
+  if (!product) return [];
+  if (Array.isArray(product.recipeOverride)) return product.recipeOverride;
+  const cat = categories.find((c) => c.id === product.categoryId);
+  return cat ? cat.defaultRecipe || [] : [];
+};
  
 const fmt = (n) =>
   new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 }).format(n || 0);
@@ -262,6 +285,8 @@ function CajaApp({ session }) {
   const [pending, setPending] = useState([]);
   const [cashBases, setCashBases] = useState([]);
   const [withdrawals, setWithdrawals] = useState([]);
+  const [insumos, setInsumos] = useState([]);       // insumos / materia prima
+  const [categories, setCategories] = useState([]); // categorías con receta base opcional
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [tab, setTab] = useState("vender");
@@ -276,13 +301,15 @@ function CajaApp({ session }) {
 
   const loadAll = useCallback(async () => {
     try {
-      const [p, t, s, pe, cb, wd] = await Promise.all([
+      const [p, t, s, pe, cb, wd, ins, cat] = await Promise.all([
         supabase.from("products").select("*").eq("user_id", userId),
         supabase.from("tables_config").select("*").eq("user_id", userId),
         supabase.from("sales").select("*").eq("user_id", userId),
         supabase.from("pending_sales").select("*").eq("user_id", userId),
         supabase.from("cash_base").select("*").eq("user_id", userId),
         supabase.from("cash_withdrawals").select("*").eq("user_id", userId),
+        supabase.from("insumos").select("*").eq("user_id", userId),
+        supabase.from("categories").select("*").eq("user_id", userId),
       ]);
  
       if (p.error) throw p.error;
@@ -291,8 +318,20 @@ function CajaApp({ session }) {
       if (pe.error) throw pe.error;
       if (cb.error) throw cb.error;
       if (wd.error) throw wd.error;
+      if (ins.error) throw ins.error;
+      if (cat.error) throw cat.error;
  
-      setProducts((p.data || []).map((r) => ({ id: r.id, name: r.name, price: Number(r.price) })));
+      setProducts((p.data || []).map((r) => ({
+        id: r.id,
+        name: r.name,
+        price: Number(r.price),
+        categoryId: r.category_id || null,
+        // "none" | "direct" | "recipe"
+        inventoryType: r.inventory_type || "none",
+        stock: r.stock != null ? Number(r.stock) : null,
+        // null => hereda la receta base de la categoría; array => receta personalizada del producto
+        recipeOverride: r.recipe_override || null,
+      })));
       setTables((t.data || []).map((r) => ({ id: r.id, name: r.name })));
       setSales((s.data || []).map((r) => ({
         id: r.id,
@@ -319,6 +358,12 @@ function CajaApp({ session }) {
       setWithdrawals((wd.data || []).map((r) => ({
         id: r.id, date: r.date, description: r.description, amount: Number(r.amount), time: r.time,
       })));
+      setInsumos((ins.data || []).map((r) => ({
+        id: r.id, name: r.name, unit: r.unit, stock: Number(r.stock || 0),
+      })));
+      setCategories((cat.data || []).map((r) => ({
+        id: r.id, name: r.name, defaultRecipe: r.default_recipe || [],
+      })));
  
       setError("");
     } catch (e) {
@@ -332,18 +377,65 @@ function CajaApp({ session }) {
   useEffect(() => { loadAll(); }, [loadAll]);
  
   /* ---------- productos ---------- */
-  const addProduct = async (name, price) => {
+  const addProduct = async (name, price, opts = {}) => {
     if (!name.trim() || !price) return;
-    const { error: e } = await supabase.from("products").insert({ user_id: userId, name: name.trim(), price: Number(price) });
+    const { categoryId = null, inventoryType = "none", stock = null, recipeOverride = null } = opts;
+    const { error: e } = await supabase.from("products").insert({
+      user_id: userId,
+      name: name.trim(),
+      price: Number(price),
+      category_id: categoryId || null,
+      inventory_type: inventoryType,
+      stock: inventoryType === "direct" ? (Number(stock) || 0) : 0, // la columna no admite null
+      recipe_override: inventoryType === "recipe" ? recipeOverride : null,
+    });
     if (e) setError("No se guardó el producto."); else loadAll();
   };
-  const editProduct = async (id, name, price) => {
-    const { error: e } = await supabase.from("products").update({ name, price: Number(price) }).eq("id", id);
+  const editProduct = async (id, name, price, opts = {}) => {
+    const { categoryId = null, inventoryType = "none", stock = null, recipeOverride = null } = opts;
+    const { error: e } = await supabase.from("products").update({
+      name,
+      price: Number(price),
+      category_id: categoryId || null,
+      inventory_type: inventoryType,
+      stock: inventoryType === "direct" ? (Number(stock) || 0) : 0, // la columna no admite null
+      recipe_override: inventoryType === "recipe" ? recipeOverride : null,
+    }).eq("id", id);
     if (e) setError("No se guardó el cambio."); else loadAll();
   };
   const deleteProduct = async (id) => {
     const { error: e } = await supabase.from("products").delete().eq("id", id);
     if (e) setError("No se pudo eliminar el producto."); else loadAll();
+  };
+
+  /* ---------- insumos / materia prima ---------- */
+  const addInsumo = async (name, unit, stock) => {
+    if (!name.trim() || !unit) return;
+    const { error: e } = await supabase.from("insumos").insert({ user_id: userId, name: name.trim(), unit, stock: Number(stock || 0) });
+    if (e) setError("No se guardó el insumo."); else loadAll();
+  };
+  const editInsumo = async (id, name, unit, stock) => {
+    const { error: e } = await supabase.from("insumos").update({ name, unit, stock: Number(stock || 0) }).eq("id", id);
+    if (e) setError("No se guardó el cambio."); else loadAll();
+  };
+  const deleteInsumo = async (id) => {
+    const { error: e } = await supabase.from("insumos").delete().eq("id", id);
+    if (e) setError("No se pudo eliminar el insumo."); else loadAll();
+  };
+
+  /* ---------- categorías (con receta base opcional) ---------- */
+  const addCategory = async (name, defaultRecipe = []) => {
+    if (!name.trim()) return;
+    const { error: e } = await supabase.from("categories").insert({ user_id: userId, name: name.trim(), default_recipe: defaultRecipe });
+    if (e) setError("No se guardó la categoría."); else loadAll();
+  };
+  const editCategory = async (id, name, defaultRecipe = []) => {
+    const { error: e } = await supabase.from("categories").update({ name, default_recipe: defaultRecipe }).eq("id", id);
+    if (e) setError("No se guardó el cambio."); else loadAll();
+  };
+  const deleteCategory = async (id) => {
+    const { error: e } = await supabase.from("categories").delete().eq("id", id);
+    if (e) setError("No se pudo eliminar la categoría."); else loadAll();
   };
  
   /* ---------- mesas ---------- */
@@ -372,11 +464,12 @@ function CajaApp({ session }) {
   const [cashReceived, setCashReceived] = useState("");
   const [saleMsg, setSaleMsg] = useState("");
  
-  const addToCart = (item) => {
+  const addToCart = (item, qty = 1) => {
+    const addQty = Math.max(1, Math.round(Number(qty) || 1));
     setCart((prev) => {
       const idx = prev.findIndex((i) => i.id === item.id);
-      if (idx > -1) { const c = [...prev]; c[idx] = { ...c[idx], qty: c[idx].qty + 1 }; return c; }
-      return [...prev, { ...item, qty: 1 }];
+      if (idx > -1) { const c = [...prev]; c[idx] = { ...c[idx], qty: c[idx].qty + addQty }; return c; }
+      return [...prev, { ...item, qty: addQty }];
     });
   };
   const decFromCart = (id) => setCart((prev) => prev.flatMap((i) => (i.id === id ? (i.qty > 1 ? [{ ...i, qty: i.qty - 1 }] : []) : [i])));
@@ -403,10 +496,48 @@ function CajaApp({ session }) {
       change: changeDue,
     });
     if (e) { setSaleMsg("No se pudo registrar la venta."); return; }
+    await applyInventoryDeductions(cart);
     setCart([]); setMethod(null); setSelectedTable(null); setCashReceived("");
     setSaleMsg("Venta registrada ✓");
     setTimeout(() => setSaleMsg(""), 2000);
     loadAll();
+  };
+
+  /* Descuenta del inventario (productos con stock directo e insumos por receta)
+     según lo vendido. Los ítems sueltos (id que empieza con "custom-") no descuentan nada. */
+  const applyInventoryDeductions = async (cartItems) => {
+    const productStockDelta = {};   // productId -> unidades a restar
+    const insumoStockDelta = {};    // insumoId -> cantidad a restar
+
+    cartItems.forEach((item) => {
+      if (String(item.id).startsWith("custom-")) return;
+      const product = products.find((p) => p.id === item.id);
+      if (!product) return;
+
+      if (product.inventoryType === "direct") {
+        productStockDelta[product.id] = (productStockDelta[product.id] || 0) + item.qty;
+      } else if (product.inventoryType === "recipe") {
+        const recipe = effectiveRecipe(product, categories);
+        recipe.forEach((ing) => {
+          insumoStockDelta[ing.insumoId] = (insumoStockDelta[ing.insumoId] || 0) + Number(ing.qty || 0) * item.qty;
+        });
+      }
+    });
+
+    const updates = [];
+    Object.entries(productStockDelta).forEach(([productId, delta]) => {
+      const product = products.find((p) => p.id === productId);
+      const newStock = Math.max(0, Number(product?.stock || 0) - delta);
+      updates.push(supabase.from("products").update({ stock: newStock }).eq("id", productId));
+    });
+    Object.entries(insumoStockDelta).forEach(([insumoId, delta]) => {
+      const insumo = insumos.find((i) => i.id === insumoId);
+      if (!insumo) return; // insumo eliminado o receta con referencia inválida
+      const newStock = Math.max(0, Number(insumo.stock || 0) - delta);
+      updates.push(supabase.from("insumos").update({ stock: newStock }).eq("id", insumoId));
+    });
+
+    if (updates.length) await Promise.all(updates);
   };
  
   const anularVenta = async (id) => {
@@ -554,6 +685,24 @@ function CajaApp({ session }) {
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
         input[type="date"] { color-scheme: light; }
 
+        /* Campos editables (inputs/selects/textarea): fondo y borde marcados para
+           diferenciarlos claramente del texto estático, con foco visible. */
+        .pos-field {
+          background: ${C.fieldBg};
+          color: ${C.ink};
+          border: 1px solid ${C.fieldBorder};
+          transition: border-color .15s ease, box-shadow .15s ease, background-color .15s ease;
+        }
+        .pos-field::placeholder { color: ${C.inkDim}; opacity: 1; }
+        .pos-field:hover { border-color: ${C.ink}; }
+        .pos-field:focus {
+          outline: none;
+          border-color: ${C.ink};
+          background: #FFFFFF;
+          box-shadow: 0 0 0 3px ${C.fieldFocusRing};
+        }
+        .pos-field:disabled { opacity: 0.6; cursor: not-allowed; }
+
         @media print {
           body * { visibility: hidden; }
           #print-ticket, #print-ticket * { visibility: visible; }
@@ -658,6 +807,8 @@ function CajaApp({ session }) {
           <ProductosTab
             products={products} addProduct={addProduct} editProduct={editProduct} deleteProduct={deleteProduct}
             tables={tables} addTable={addTable} editTable={editTable} deleteTable={deleteTable}
+            insumos={insumos} addInsumo={addInsumo} editInsumo={editInsumo} deleteInsumo={deleteInsumo}
+            categories={categories} addCategory={addCategory} editCategory={editCategory} deleteCategory={deleteCategory}
           />
         )}
         </div>
@@ -674,16 +825,22 @@ function VenderTab({
   tables, selectedTable, setSelectedTable, cashReceived, setCashReceived, pauseSale,
 }) {
   const [query, setQuery] = useState("");
- 
+  const [modalProduct, setModalProduct] = useState(null); // producto pendiente de confirmar cantidad
+
   const filtered = useMemo(() => {
     const q = normalize(query);
     if (!q) return products;
     return products.filter((p) => normalize(p.name).includes(q));
   }, [products, query]);
- 
-  const handlePick = (p) => { addToCart(p); setQuery(""); };
+
+  const handlePick = (p) => setModalProduct(p);
+  const confirmQuantity = (qty) => {
+    if (modalProduct) addToCart(modalProduct, qty);
+    setModalProduct(null);
+    setQuery("");
+  };
   const change = cashReceived ? Number(cashReceived) - cartTotal : 0;
- 
+
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: 24 }}>
       {/* columna izquierda: catálogo, mesa, ítem suelto, cuenta */}
@@ -691,11 +848,11 @@ function VenderTab({
         <Card>
           <SectionLabel>Buscar producto</SectionLabel>
           <div className="relative mt-2">
-            <Search size={16} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: C.inkDim }} />
+            <Search size={16} className="pointer-events-none" style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: C.inkDim, zIndex: 1 }} />
             <input placeholder="Escribe el nombre del producto…" value={query} onChange={(e) => setQuery(e.target.value)}
-              className="w-full pl-8 pr-3 py-2 text-sm rounded" style={{ background: "#FFFFFF", color: C.ink, border: `1px solid ${C.border}` }} />
+              className="pos-field w-full py-2 text-sm rounded" style={{ paddingLeft: 36, paddingRight: 36, boxSizing: "border-box" }} />
             {query && (
-              <button onClick={() => setQuery("")} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", color: C.inkDim }}>
+              <button onClick={() => setQuery("")} style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", color: C.inkDim }}>
                 <X size={14} />
               </button>
             )}
@@ -719,7 +876,7 @@ function VenderTab({
             ))}
           </div>
         </Card>
- 
+
         <Card>
           <SectionLabel>Mesa</SectionLabel>
           <div className="flex flex-wrap gap-2 mt-2">
@@ -730,14 +887,14 @@ function VenderTab({
             {tables.length === 0 && <p className="text-xs self-center" style={{ color: C.inkDim }}>Agrega mesas en la pestaña "Productos".</p>}
           </div>
         </Card>
- 
+
         <Card>
           <SectionLabel>Ítem suelto</SectionLabel>
           <div className="flex gap-2 mt-2">
             <input placeholder="Nombre" value={customName} onChange={(e) => setCustomName(e.target.value)}
-              className="flex-1 min-w-0 px-2 py-2 text-sm rounded" style={{ background: "#FFFFFF", color: C.ink, border: `1px solid ${C.border}` }} />
+              className="pos-field flex-1 min-w-0 px-2 py-2 text-sm rounded" />
             <input placeholder="Valor" inputMode="numeric" value={customPrice} onChange={(e) => setCustomPrice(e.target.value.replace(/\D/g, ""))}
-              className="w-24 px-2 py-2 text-sm rounded" style={{ background: "#FFFFFF", color: C.ink, border: `1px solid ${C.border}` }} />
+              className="pos-field w-24 px-2 py-2 text-sm rounded" />
             <button onClick={() => {
                 if (!customName.trim() || !customPrice) return;
                 addToCart({ id: "custom-" + Date.now(), name: customName.trim(), price: Number(customPrice) });
@@ -747,7 +904,7 @@ function VenderTab({
             </button>
           </div>
         </Card>
- 
+
         <Card>
           <SectionLabel>Cuenta</SectionLabel>
           <div className="mt-2" style={{ minHeight: 60 }}>
@@ -765,7 +922,7 @@ function VenderTab({
           </div>
         </Card>
       </div>
- 
+
       {/* columna derecha: información de venta */}
       <div style={{ flex: "1 1 300px", minWidth: 0 }}>
         <div className="flex flex-col gap-4 sticky top-4">
@@ -775,7 +932,7 @@ function VenderTab({
               <VFD label="Total cuenta" value={cartTotal} tone="accent" />
             </div>
           </Card>
- 
+
           <Card>
             <SectionLabel>Pago</SectionLabel>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 8, marginTop: 8 }}>
@@ -787,17 +944,17 @@ function VenderTab({
               ))}
             </div>
           </Card>
- 
+
           <Card>
             <SectionLabel>Pago recibido</SectionLabel>
             <input placeholder="¿Cuánto dio el cliente?" inputMode="numeric" value={cashReceived}
               onChange={(e) => setCashReceived(e.target.value.replace(/\D/g, ""))}
-              className="w-full mt-2 px-2 py-2 text-sm rounded" style={{ background: "#FFFFFF", color: C.ink, border: `1px solid ${C.border}` }} />
+              className="pos-field w-full mt-2 px-2 py-2 text-sm rounded" />
             {cashReceived !== "" && (
               <div className="mt-2"><VFD label={change < 0 ? "Falta" : "Vueltas"} value={Math.abs(change)} tone={change < 0 ? "danger" : "accent"} /></div>
             )}
           </Card>
- 
+
           <div className="flex flex-col gap-2">
             <button onClick={registerSale} className="py-3 rounded-md font-semibold" style={{ background: C.gold, color: "#FFFFFF" }}>
               Registrar venta
@@ -808,6 +965,92 @@ function VenderTab({
             {saleMsg && <p className="text-center text-sm" style={{ color: saleMsg.includes("✓") ? C.goldDark : C.danger }}>{saleMsg}</p>}
           </div>
         </div>
+      </div>
+
+      {modalProduct && (
+        <QuantityModal product={modalProduct} onConfirm={confirmQuantity} onClose={() => setModalProduct(null)} />
+      )}
+    </div>
+  );
+}
+
+/* Modal rápido de cantidad al agregar un producto a la cuenta. */
+function QuantityModal({ product, onConfirm, onClose }) {
+  const [qty, setQty] = useState(1);
+  const inputRef = React.useRef(null);
+
+  useEffect(() => {
+    const id = setTimeout(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }, 30);
+    return () => clearTimeout(id);
+  }, []);
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const bump = (n) => setQty((q) => Math.max(1, q + n));
+  const submit = () => {
+    const n = Math.max(1, Math.round(Number(qty) || 1));
+    onConfirm(n);
+  };
+
+  return (
+    <div
+      className="fixed inset-0 flex items-center justify-center px-4"
+      style={{ background: "rgba(17,17,17,0.45)", zIndex: 60 }}
+      onClick={onClose}
+    >
+      <div
+        className="w-full rounded-md p-5"
+        style={{ background: C.paper, border: `1px solid ${C.border}`, maxWidth: 340, boxSizing: "border-box" }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between mb-1">
+          <div>
+            <SectionLabel>Agregar a la cuenta</SectionLabel>
+            <div className="text-base font-semibold mt-1" style={{ color: C.ink, fontFamily: "'Inter', sans-serif" }}>{product.name}</div>
+            <div className="text-sm" style={{ color: C.inkDim, fontFamily: "'Inter', sans-serif" }}>{fmt(product.price)} c/u</div>
+          </div>
+          <button onClick={onClose} style={{ color: C.inkDim }}><X size={16} /></button>
+        </div>
+
+        <form
+          onSubmit={(e) => { e.preventDefault(); submit(); }}
+          className="mt-4 flex flex-col gap-3"
+        >
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={() => bump(-1)} className="w-10 h-10 rounded-md font-semibold text-lg" style={{ background: C.goldSoft, color: C.ink }}>−</button>
+            <input
+              ref={inputRef}
+              type="number"
+              min={1}
+              inputMode="numeric"
+              value={qty}
+              onChange={(e) => setQty(e.target.value.replace(/\D/g, "") || "")}
+              className="pos-field flex-1 text-center text-lg font-semibold py-2 rounded"
+            />
+            <button type="button" onClick={() => bump(1)} className="w-10 h-10 rounded-md font-semibold text-lg" style={{ background: C.goldSoft, color: C.ink }}>+</button>
+          </div>
+
+          <div className="flex gap-2">
+            <button type="button" onClick={() => bump(1)} className="flex-1 py-2 rounded text-sm font-semibold" style={{ background: "#FFFFFF", color: C.ink, border: `1px solid ${C.border}` }}>+1</button>
+            <button type="button" onClick={() => bump(2)} className="flex-1 py-2 rounded text-sm font-semibold" style={{ background: "#FFFFFF", color: C.ink, border: `1px solid ${C.border}` }}>+2</button>
+            <button type="button" onClick={() => bump(5)} className="flex-1 py-2 rounded text-sm font-semibold" style={{ background: "#FFFFFF", color: C.ink, border: `1px solid ${C.border}` }}>+5</button>
+          </div>
+
+          <div className="text-right text-sm font-semibold" style={{ color: C.goldDark, fontFamily: "'Inter', sans-serif" }}>
+            Subtotal: {fmt(product.price * Math.max(1, Number(qty) || 1))}
+          </div>
+
+          <button type="submit" className="py-3 rounded-md font-semibold" style={{ background: C.gold, color: "#FFFFFF" }}>
+            Añadir a la cuenta
+          </button>
+        </form>
       </div>
     </div>
   );
@@ -1226,101 +1469,503 @@ function MethodBreakdown({ byMethod }) {
   );
 }
  
+/* Selector de insumo + cantidad, reutilizado en categorías y productos con inventario "por receta". */
+function RecipeBuilder({ insumos, recipe, onChange }) {
+  const addRow = () => {
+    const used = recipe.map((r) => r.insumoId);
+    const next = insumos.find((i) => !used.includes(i.id));
+    if (!next) return;
+    onChange([...recipe, { insumoId: next.id, qty: "" }]);
+  };
+  const updateRow = (idx, patch) => {
+    const copy = recipe.slice();
+    copy[idx] = { ...copy[idx], ...patch };
+    onChange(copy);
+  };
+  const removeRow = (idx) => onChange(recipe.filter((_, i) => i !== idx));
+
+  if (insumos.length === 0) {
+    return <p className="text-xs" style={{ color: C.danger }}>Crea insumos primero en la pestaña "Insumos".</p>;
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      {recipe.length === 0 && <p className="text-xs" style={{ color: C.inkDim }}>Sin insumos asociados todavía.</p>}
+      {recipe.map((row, idx) => {
+        const insumo = insumos.find((i) => i.id === row.insumoId);
+        return (
+          <div key={idx} className="flex items-center gap-2">
+            <select
+              className="pos-field flex-1 min-w-0 px-2 py-1.5 text-sm rounded"
+              value={row.insumoId}
+              onChange={(e) => updateRow(idx, { insumoId: e.target.value })}
+            >
+              {insumos.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
+            </select>
+            <input
+              className="pos-field w-20 px-2 py-1.5 text-sm rounded"
+              inputMode="decimal"
+              placeholder="Cant."
+              value={row.qty}
+              onChange={(e) => updateRow(idx, { qty: e.target.value.replace(/[^0-9.]/g, "") })}
+            />
+            <span className="text-xs w-8 shrink-0" style={{ color: C.inkDim }}>{insumo ? insumo.unit : ""}</span>
+            <button type="button" onClick={() => removeRow(idx)} style={{ color: C.danger }}><X size={14} /></button>
+          </div>
+        );
+      })}
+      <button
+        type="button"
+        onClick={addRow}
+        disabled={recipe.length >= insumos.length}
+        className="self-start text-xs font-semibold flex items-center gap-1 mt-1 disabled:opacity-40"
+        style={{ color: C.goldDark }}
+      >
+        <Plus size={12} /> Agregar insumo
+      </button>
+    </div>
+  );
+}
+
+/* Resumen corto y legible de cómo un producto afecta el inventario, usado en el catálogo. */
+function inventorySummary(p, insumos, categories) {
+  if (p.inventoryType === "direct") return `Directo · stock: ${p.stock ?? 0} u.`;
+  if (p.inventoryType === "recipe") {
+    const recipe = effectiveRecipe(p, categories);
+    if (recipe.length === 0) return "Receta · sin insumos configurados";
+    const parts = recipe.map((r) => {
+      const ins = insumos.find((i) => i.id === r.insumoId);
+      return ins ? `${r.qty}${ins.unit} ${ins.name}` : null;
+    }).filter(Boolean);
+    const source = p.recipeOverride ? "" : " (de categoría)";
+    return `Receta${source} · ${parts.join(", ")}`;
+  }
+  return "Sin inventario";
+}
+
+/* Formulario compartido (crear/editar) para los campos de inventario de un producto. */
+function ProductInventoryFields({ categories, insumos, categoryId, setCategoryId, inventoryType, setInventoryType, stock, setStock, recipeMode, setRecipeMode, customRecipe, setCustomRecipe }) {
+  const category = categories.find((c) => c.id === categoryId);
+  const hasCategoryRecipe = !!category && (category.defaultRecipe || []).length > 0;
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div>
+        <label className="text-xs font-semibold" style={{ color: C.inkDim }}>Categoría</label>
+        <select className="pos-field w-full mt-1 px-2 py-2 text-sm rounded" value={categoryId || ""} onChange={(e) => setCategoryId(e.target.value || null)}>
+          <option value="">Sin categoría</option>
+          {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+      </div>
+
+      <div>
+        <label className="text-xs font-semibold" style={{ color: C.inkDim }}>Tipo de inventario</label>
+        <div className="grid grid-cols-1 gap-2 mt-1">
+          <KeyBtn active={inventoryType === "none"} onClick={() => setInventoryType("none")} style={{ padding: "8px", textAlign: "left" }}>Sin inventario</KeyBtn>
+          <KeyBtn active={inventoryType === "direct"} onClick={() => setInventoryType("direct")} style={{ padding: "8px", textAlign: "left" }}>Directo por unidades</KeyBtn>
+          <KeyBtn active={inventoryType === "recipe"} onClick={() => setInventoryType("recipe")} style={{ padding: "8px", textAlign: "left" }}>Por insumos / receta</KeyBtn>
+        </div>
+      </div>
+
+      {inventoryType === "direct" && (
+        <div>
+          <label className="text-xs font-semibold" style={{ color: C.inkDim }}>Stock actual (unidades)</label>
+          <input inputMode="numeric" value={stock} onChange={(e) => setStock(e.target.value.replace(/\D/g, ""))}
+            className="pos-field w-full mt-1 px-2 py-2 text-sm rounded" placeholder="0" />
+        </div>
+      )}
+
+      {inventoryType === "recipe" && (
+        <div className="flex flex-col gap-2">
+          {hasCategoryRecipe && (
+            <div className="grid grid-cols-2 gap-2">
+              <KeyBtn active={recipeMode === "category"} onClick={() => setRecipeMode("category")} style={{ padding: "8px", fontSize: 12 }}>Usar receta de categoría</KeyBtn>
+              <KeyBtn active={recipeMode === "custom"} onClick={() => setRecipeMode("custom")} style={{ padding: "8px", fontSize: 12 }}>Personalizar</KeyBtn>
+            </div>
+          )}
+          {recipeMode === "category" && hasCategoryRecipe ? (
+            <div className="text-xs rounded-md px-3 py-2" style={{ background: C.goldSoft, color: C.ink }}>
+              {category.defaultRecipe.map((r) => {
+                const ins = insumos.find((i) => i.id === r.insumoId);
+                return ins ? `${r.qty}${ins.unit} ${ins.name}` : null;
+              }).filter(Boolean).join(", ") || "Sin insumos en la categoría."}
+            </div>
+          ) : (
+            <RecipeBuilder insumos={insumos} recipe={customRecipe} onChange={setCustomRecipe} />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ================= PRODUCTOS ================= */
-function ProductosTab({ products, addProduct, editProduct, deleteProduct, tables, addTable, editTable, deleteTable }) {
+function ProductosTab({
+  products, addProduct, editProduct, deleteProduct, tables, addTable, editTable, deleteTable,
+  insumos, addInsumo, editInsumo, deleteInsumo,
+  categories, addCategory, editCategory, deleteCategory,
+}) {
+  const [section, setSection] = useState("productos"); // "productos" | "categorias" | "insumos"
+
+  /* --- nuevo producto --- */
   const [name, setName] = useState("");
   const [price, setPrice] = useState("");
+  const [categoryId, setCategoryId] = useState(null);
+  const [inventoryType, setInventoryType] = useState("none");
+  const [stock, setStock] = useState("");
+  const [recipeMode, setRecipeMode] = useState("category");
+  const [customRecipe, setCustomRecipe] = useState([]);
+
+  const resetProductForm = () => {
+    setName(""); setPrice(""); setCategoryId(null); setInventoryType("none");
+    setStock(""); setRecipeMode("category"); setCustomRecipe([]);
+  };
+
+  const submitNewProduct = () => {
+    if (!name.trim() || !price) return;
+    addProduct(name, price, {
+      categoryId,
+      inventoryType,
+      stock: inventoryType === "direct" ? stock : null,
+      recipeOverride: inventoryType === "recipe" && recipeMode === "custom" ? customRecipe.filter((r) => r.insumoId && r.qty) : null,
+    });
+    resetProductForm();
+  };
+
+  /* --- edición de producto --- */
   const [editingId, setEditingId] = useState(null);
   const [editName, setEditName] = useState("");
   const [editPrice, setEditPrice] = useState("");
- 
+  const [editCategoryId, setEditCategoryId] = useState(null);
+  const [editInventoryType, setEditInventoryType] = useState("none");
+  const [editStock, setEditStock] = useState("");
+  const [editRecipeMode, setEditRecipeMode] = useState("category");
+  const [editCustomRecipe, setEditCustomRecipe] = useState([]);
+
+  const startEditProduct = (p) => {
+    setEditingId(p.id);
+    setEditName(p.name);
+    setEditPrice(String(p.price));
+    setEditCategoryId(p.categoryId || null);
+    setEditInventoryType(p.inventoryType || "none");
+    setEditStock(p.stock != null ? String(p.stock) : "");
+    setEditRecipeMode(p.recipeOverride ? "custom" : "category");
+    setEditCustomRecipe(p.recipeOverride || []);
+  };
+
+  const submitEditProduct = () => {
+    editProduct(editingId, editName, editPrice, {
+      categoryId: editCategoryId,
+      inventoryType: editInventoryType,
+      stock: editInventoryType === "direct" ? editStock : null,
+      recipeOverride: editInventoryType === "recipe" && editRecipeMode === "custom" ? editCustomRecipe.filter((r) => r.insumoId && r.qty) : null,
+    });
+    setEditingId(null);
+  };
+
+  /* --- mesas (sin cambios) --- */
   const [tableName, setTableName] = useState("");
   const [editingTableId, setEditingTableId] = useState(null);
   const [editTableName, setEditTableName] = useState("");
- 
+
+  /* --- categorías --- */
+  const [catName, setCatName] = useState("");
+  const [catRecipe, setCatRecipe] = useState([]);
+  const [editingCatId, setEditingCatId] = useState(null);
+  const [editCatName, setEditCatName] = useState("");
+  const [editCatRecipe, setEditCatRecipe] = useState([]);
+
+  const startEditCategory = (c) => {
+    setEditingCatId(c.id); setEditCatName(c.name); setEditCatRecipe(c.defaultRecipe || []);
+  };
+
+  /* --- insumos --- */
+  const [insName, setInsName] = useState("");
+  const [insUnit, setInsUnit] = useState(UNIT_OPTIONS[0].id);
+  const [insStock, setInsStock] = useState("");
+  const [editingInsId, setEditingInsId] = useState(null);
+  const [editInsName, setEditInsName] = useState("");
+  const [editInsUnit, setEditInsUnit] = useState(UNIT_OPTIONS[0].id);
+  const [editInsStock, setEditInsStock] = useState("");
+
+  const startEditInsumo = (i) => {
+    setEditingInsId(i.id); setEditInsName(i.name); setEditInsUnit(i.unit); setEditInsStock(String(i.stock));
+  };
+
   return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 24 }}>
-      <div style={{ flex: "1 1 320px", minWidth: 0 }} className="flex flex-col gap-4">
-        <Card>
-          <SectionLabel>Nuevo producto</SectionLabel>
-          <div className="flex gap-2 mt-2">
-            <input placeholder="Nombre" value={name} onChange={(e) => setName(e.target.value)}
-              className="flex-1 min-w-0 px-2 py-2 text-sm rounded" style={{ background: "#FFFFFF", color: C.ink, border: `1px solid ${C.border}` }} />
-            <input placeholder="Valor" inputMode="numeric" value={price} onChange={(e) => setPrice(e.target.value.replace(/\D/g, ""))}
-              className="w-24 px-2 py-2 text-sm rounded" style={{ background: "#FFFFFF", color: C.ink, border: `1px solid ${C.border}` }} />
-            <button onClick={() => { addProduct(name, price); setName(""); setPrice(""); }}
-              className="px-3 rounded" style={{ background: C.gold, color: "#FFFFFF" }}>
-              <Plus size={16} />
-            </button>
-          </div>
-        </Card>
- 
-        <Card>
-          <SectionLabel>Catálogo</SectionLabel>
-          <div className="mt-2 flex flex-col gap-2">
-            {products.length === 0 && <p className="text-sm" style={{ color: C.inkDim }}>Aún no hay productos.</p>}
-            {products.map((p, idx) => (
-              <div key={p.id} className="flex items-center justify-between py-2" style={{ borderBottom: idx < products.length - 1 ? `1px solid ${C.border}` : "none" }}>
-                {editingId === p.id ? (
-                  <>
-                    <div className="flex gap-2 flex-1">
-                      <input value={editName} onChange={(e) => setEditName(e.target.value)} className="flex-1 min-w-0 px-2 py-1 text-sm rounded" style={{ background: "#FFFFFF", color: C.ink, border: `1px solid ${C.border}` }} />
-                      <input value={editPrice} onChange={(e) => setEditPrice(e.target.value.replace(/\D/g, ""))} className="w-20 px-2 py-1 text-sm rounded" style={{ background: "#FFFFFF", color: C.ink, border: `1px solid ${C.border}` }} />
-                    </div>
-                    <button onClick={() => { editProduct(p.id, editName, editPrice); setEditingId(null); }} className="ml-2" style={{ color: C.goldDark }}><Check size={16} /></button>
-                  </>
-                ) : (
-                  <>
-                    <div>
-                      <div className="text-sm" style={{ color: C.ink }}>{p.name}</div>
-                      <div className="text-xs" style={{ color: C.inkDim, fontFamily: "'Inter', sans-serif" }}>{fmt(p.price)}</div>
-                    </div>
-                    <div className="flex gap-3">
-                      <button onClick={() => { setEditingId(p.id); setEditName(p.name); setEditPrice(String(p.price)); }} style={{ color: C.inkDim }}><Pencil size={14} /></button>
-                      <button onClick={() => deleteProduct(p.id)} style={{ color: C.danger }}><Trash2 size={14} /></button>
-                    </div>
-                  </>
-                )}
-              </div>
-            ))}
-          </div>
-        </Card>
+    <div className="flex flex-col gap-5">
+      <div className="grid grid-cols-3 gap-2">
+        <KeyBtn active={section === "productos"} onClick={() => setSection("productos")} style={{ padding: "8px" }}>Productos</KeyBtn>
+        <KeyBtn active={section === "categorias"} onClick={() => setSection("categorias")} style={{ padding: "8px" }}>Categorías</KeyBtn>
+        <KeyBtn active={section === "insumos"} onClick={() => setSection("insumos")} style={{ padding: "8px" }}>Insumos</KeyBtn>
       </div>
- 
-      <div style={{ flex: "1 1 320px", minWidth: 0 }} className="flex flex-col gap-4">
-        <Card>
-          <SectionLabel>Mesas</SectionLabel>
-          <div className="flex gap-2 mt-2">
-            <input placeholder="Nombre o número de mesa" value={tableName} onChange={(e) => setTableName(e.target.value)}
-              className="flex-1 min-w-0 px-2 py-2 text-sm rounded" style={{ background: "#FFFFFF", color: C.ink, border: `1px solid ${C.border}` }} />
-            <button onClick={() => { addTable(tableName); setTableName(""); }}
-              className="px-3 rounded" style={{ background: C.gold, color: "#FFFFFF" }}>
-              <Plus size={16} />
-            </button>
-          </div>
-          <div className="mt-3 flex flex-col gap-2">
-            {tables.length === 0 && <p className="text-sm" style={{ color: C.inkDim }}>Aún no hay mesas registradas.</p>}
-            {tables.map((t, idx) => (
-              <div key={t.id} className="flex items-center justify-between py-2" style={{ borderBottom: idx < tables.length - 1 ? `1px solid ${C.border}` : "none" }}>
-                {editingTableId === t.id ? (
-                  <>
-                    <input value={editTableName} onChange={(e) => setEditTableName(e.target.value)} className="flex-1 min-w-0 px-2 py-1 text-sm rounded" style={{ background: "#FFFFFF", color: C.ink, border: `1px solid ${C.border}` }} />
-                    <button onClick={() => { editTable(t.id, editTableName); setEditingTableId(null); }} className="ml-2" style={{ color: C.goldDark }}><Check size={16} /></button>
-                  </>
-                ) : (
-                  <>
-                    <div className="text-sm" style={{ color: C.ink }}>{t.name}</div>
-                    <div className="flex gap-3">
-                      <button onClick={() => { setEditingTableId(t.id); setEditTableName(t.name); }} style={{ color: C.inkDim }}><Pencil size={14} /></button>
-                      <button onClick={() => deleteTable(t.id)} style={{ color: C.danger }}><Trash2 size={14} /></button>
-                    </div>
-                  </>
-                )}
+
+      {section === "productos" && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 24 }}>
+          <div style={{ flex: "1 1 340px", minWidth: 0 }} className="flex flex-col gap-4">
+            <Card>
+              <SectionLabel>Nuevo producto</SectionLabel>
+              <div className="flex gap-2 mt-2">
+                <input placeholder="Nombre" value={name} onChange={(e) => setName(e.target.value)}
+                  className="pos-field flex-1 min-w-0 px-2 py-2 text-sm rounded" />
+                <input placeholder="Valor" inputMode="numeric" value={price} onChange={(e) => setPrice(e.target.value.replace(/\D/g, ""))}
+                  className="pos-field w-24 px-2 py-2 text-sm rounded" />
               </div>
-            ))}
+              <div className="mt-3">
+                <ProductInventoryFields
+                  categories={categories} insumos={insumos}
+                  categoryId={categoryId} setCategoryId={setCategoryId}
+                  inventoryType={inventoryType} setInventoryType={setInventoryType}
+                  stock={stock} setStock={setStock}
+                  recipeMode={recipeMode} setRecipeMode={setRecipeMode}
+                  customRecipe={customRecipe} setCustomRecipe={setCustomRecipe}
+                />
+              </div>
+              <button onClick={submitNewProduct} className="w-full mt-3 py-2 rounded font-semibold flex items-center justify-center gap-1" style={{ background: C.gold, color: "#FFFFFF" }}>
+                <Plus size={16} /> Agregar producto
+              </button>
+            </Card>
           </div>
-        </Card>
-      </div>
+
+          <div style={{ flex: "1 1 340px", minWidth: 0 }} className="flex flex-col gap-4">
+            <Card>
+              <SectionLabel>Catálogo</SectionLabel>
+              <div className="mt-2 flex flex-col gap-2">
+                {products.length === 0 && <p className="text-sm" style={{ color: C.inkDim }}>Aún no hay productos.</p>}
+                {products.map((p, idx) => {
+                  const cat = categories.find((c) => c.id === p.categoryId);
+                  return (
+                    <div key={p.id} className="py-2" style={{ borderBottom: idx < products.length - 1 ? `1px solid ${C.border}` : "none" }}>
+                      {editingId === p.id ? (
+                        <div className="flex flex-col gap-2">
+                          <div className="flex gap-2">
+                            <input value={editName} onChange={(e) => setEditName(e.target.value)} className="pos-field flex-1 min-w-0 px-2 py-1.5 text-sm rounded" />
+                            <input value={editPrice} onChange={(e) => setEditPrice(e.target.value.replace(/\D/g, ""))} className="pos-field w-24 px-2 py-1.5 text-sm rounded" />
+                          </div>
+                          <ProductInventoryFields
+                            categories={categories} insumos={insumos}
+                            categoryId={editCategoryId} setCategoryId={setEditCategoryId}
+                            inventoryType={editInventoryType} setInventoryType={setEditInventoryType}
+                            stock={editStock} setStock={setEditStock}
+                            recipeMode={editRecipeMode} setRecipeMode={setEditRecipeMode}
+                            customRecipe={editCustomRecipe} setCustomRecipe={setEditCustomRecipe}
+                          />
+                          <div className="flex gap-2 mt-1">
+                            <button onClick={submitEditProduct} className="flex-1 py-1.5 rounded text-sm font-semibold flex items-center justify-center gap-1" style={{ background: C.gold, color: "#FFFFFF" }}>
+                              <Check size={14} /> Guardar
+                            </button>
+                            <button onClick={() => setEditingId(null)} className="flex-1 py-1.5 rounded text-sm font-semibold" style={{ background: "#FFFFFF", color: C.ink, border: `1px solid ${C.border}` }}>
+                              Cancelar
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-between">
+                          <div className="min-w-0">
+                            <div className="text-sm" style={{ color: C.ink }}>
+                              {p.name} {cat && <span className="text-xs" style={{ color: C.inkDim }}>· {cat.name}</span>}
+                            </div>
+                            <div className="text-xs" style={{ color: C.inkDim, fontFamily: "'Inter', sans-serif" }}>{fmt(p.price)}</div>
+                            <div className="text-xs mt-0.5" style={{ color: C.goldDark }}>{inventorySummary(p, insumos, categories)}</div>
+                          </div>
+                          <div className="flex gap-3 shrink-0 ml-2">
+                            <button onClick={() => startEditProduct(p)} style={{ color: C.inkDim }}><Pencil size={14} /></button>
+                            <button onClick={() => deleteProduct(p.id)} style={{ color: C.danger }}><Trash2 size={14} /></button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+
+            <Card>
+              <SectionLabel>Mesas</SectionLabel>
+              <div className="flex gap-2 mt-2">
+                <input placeholder="Nombre o número de mesa" value={tableName} onChange={(e) => setTableName(e.target.value)}
+                  className="pos-field flex-1 min-w-0 px-2 py-2 text-sm rounded" />
+                <button onClick={() => { addTable(tableName); setTableName(""); }}
+                  className="px-3 rounded" style={{ background: C.gold, color: "#FFFFFF" }}>
+                  <Plus size={16} />
+                </button>
+              </div>
+              <div className="mt-3 flex flex-col gap-2">
+                {tables.length === 0 && <p className="text-sm" style={{ color: C.inkDim }}>Aún no hay mesas registradas.</p>}
+                {tables.map((t, idx) => (
+                  <div key={t.id} className="flex items-center justify-between py-2" style={{ borderBottom: idx < tables.length - 1 ? `1px solid ${C.border}` : "none" }}>
+                    {editingTableId === t.id ? (
+                      <>
+                        <input value={editTableName} onChange={(e) => setEditTableName(e.target.value)} className="pos-field flex-1 min-w-0 px-2 py-1 text-sm rounded" />
+                        <button onClick={() => { editTable(t.id, editTableName); setEditingTableId(null); }} className="ml-2" style={{ color: C.goldDark }}><Check size={16} /></button>
+                      </>
+                    ) : (
+                      <>
+                        <div className="text-sm" style={{ color: C.ink }}>{t.name}</div>
+                        <div className="flex gap-3">
+                          <button onClick={() => { setEditingTableId(t.id); setEditTableName(t.name); }} style={{ color: C.inkDim }}><Pencil size={14} /></button>
+                          <button onClick={() => deleteTable(t.id)} style={{ color: C.danger }}><Trash2 size={14} /></button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </Card>
+          </div>
+        </div>
+      )}
+
+      {section === "categorias" && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 24 }}>
+          <div style={{ flex: "1 1 340px", minWidth: 0 }}>
+            <Card>
+              <SectionLabel>Nueva categoría</SectionLabel>
+              <p className="text-xs mt-1" style={{ color: C.inkDim }}>
+                Define aquí el consumo base de insumos por venta para los productos de esta categoría (ej. "Cafés" → 18g de café en grano). Cada producto puede usarla tal cual o personalizarla.
+              </p>
+              <input placeholder="Nombre de la categoría" value={catName} onChange={(e) => setCatName(e.target.value)}
+                className="pos-field w-full mt-3 px-2 py-2 text-sm rounded" />
+              <div className="mt-3">
+                <label className="text-xs font-semibold" style={{ color: C.inkDim }}>Receta base (opcional)</label>
+                <div className="mt-1">
+                  <RecipeBuilder insumos={insumos} recipe={catRecipe} onChange={setCatRecipe} />
+                </div>
+              </div>
+              <button
+                onClick={() => { addCategory(catName, catRecipe.filter((r) => r.insumoId && r.qty)); setCatName(""); setCatRecipe([]); }}
+                className="w-full mt-3 py-2 rounded font-semibold flex items-center justify-center gap-1" style={{ background: C.gold, color: "#FFFFFF" }}
+              >
+                <Plus size={16} /> Agregar categoría
+              </button>
+            </Card>
+          </div>
+
+          <div style={{ flex: "1 1 340px", minWidth: 0 }}>
+            <Card>
+              <SectionLabel>Categorías</SectionLabel>
+              <div className="mt-2 flex flex-col gap-3">
+                {categories.length === 0 && <p className="text-sm" style={{ color: C.inkDim }}>Aún no hay categorías.</p>}
+                {categories.map((c, idx) => (
+                  <div key={c.id} className="py-2" style={{ borderBottom: idx < categories.length - 1 ? `1px solid ${C.border}` : "none" }}>
+                    {editingCatId === c.id ? (
+                      <div className="flex flex-col gap-2">
+                        <input value={editCatName} onChange={(e) => setEditCatName(e.target.value)} className="pos-field w-full px-2 py-1.5 text-sm rounded" />
+                        <RecipeBuilder insumos={insumos} recipe={editCatRecipe} onChange={setEditCatRecipe} />
+                        <div className="flex gap-2 mt-1">
+                          <button
+                            onClick={() => { editCategory(c.id, editCatName, editCatRecipe.filter((r) => r.insumoId && r.qty)); setEditingCatId(null); }}
+                            className="flex-1 py-1.5 rounded text-sm font-semibold flex items-center justify-center gap-1" style={{ background: C.gold, color: "#FFFFFF" }}
+                          >
+                            <Check size={14} /> Guardar
+                          </button>
+                          <button onClick={() => setEditingCatId(null)} className="flex-1 py-1.5 rounded text-sm font-semibold" style={{ background: "#FFFFFF", color: C.ink, border: `1px solid ${C.border}` }}>
+                            Cancelar
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between">
+                        <div className="min-w-0">
+                          <div className="text-sm" style={{ color: C.ink }}>{c.name}</div>
+                          <div className="text-xs mt-0.5" style={{ color: C.inkDim }}>
+                            {(c.defaultRecipe || []).length === 0
+                              ? "Sin receta base."
+                              : c.defaultRecipe.map((r) => {
+                                  const ins = insumos.find((i) => i.id === r.insumoId);
+                                  return ins ? `${r.qty}${ins.unit} ${ins.name}` : null;
+                                }).filter(Boolean).join(", ")}
+                          </div>
+                        </div>
+                        <div className="flex gap-3 shrink-0 ml-2">
+                          <button onClick={() => startEditCategory(c)} style={{ color: C.inkDim }}><Pencil size={14} /></button>
+                          <button onClick={() => deleteCategory(c.id)} style={{ color: C.danger }}><Trash2 size={14} /></button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </Card>
+          </div>
+        </div>
+      )}
+
+      {section === "insumos" && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 24 }}>
+          <div style={{ flex: "1 1 340px", minWidth: 0 }}>
+            <Card>
+              <SectionLabel>Nuevo insumo</SectionLabel>
+              <p className="text-xs mt-1" style={{ color: C.inkDim }}>
+                Materia prima que se descuenta del stock cuando se vende un producto configurado "Por insumos/receta" (ej. café en grano, leche, tortillas).
+              </p>
+              <div className="flex flex-col gap-2 mt-3">
+                <input placeholder="Nombre del insumo" value={insName} onChange={(e) => setInsName(e.target.value)}
+                  className="pos-field w-full px-2 py-2 text-sm rounded" />
+                <div className="flex gap-2">
+                  <select value={insUnit} onChange={(e) => setInsUnit(e.target.value)} className="pos-field flex-1 min-w-0 px-2 py-2 text-sm rounded">
+                    {UNIT_OPTIONS.map((u) => <option key={u.id} value={u.id}>{u.label}</option>)}
+                  </select>
+                  <input placeholder="Stock inicial" inputMode="decimal" value={insStock} onChange={(e) => setInsStock(e.target.value.replace(/[^0-9.]/g, ""))}
+                    className="pos-field w-28 px-2 py-2 text-sm rounded" />
+                </div>
+              </div>
+              <button
+                onClick={() => { addInsumo(insName, insUnit, insStock); setInsName(""); setInsStock(""); }}
+                className="w-full mt-3 py-2 rounded font-semibold flex items-center justify-center gap-1" style={{ background: C.gold, color: "#FFFFFF" }}
+              >
+                <Plus size={16} /> Agregar insumo
+              </button>
+            </Card>
+          </div>
+
+          <div style={{ flex: "1 1 340px", minWidth: 0 }}>
+            <Card>
+              <SectionLabel>Insumos / materia prima</SectionLabel>
+              <div className="mt-2 flex flex-col gap-2">
+                {insumos.length === 0 && <p className="text-sm" style={{ color: C.inkDim }}>Aún no hay insumos registrados.</p>}
+                {insumos.map((i, idx) => (
+                  <div key={i.id} className="py-2" style={{ borderBottom: idx < insumos.length - 1 ? `1px solid ${C.border}` : "none" }}>
+                    {editingInsId === i.id ? (
+                      <div className="flex flex-col gap-2">
+                        <input value={editInsName} onChange={(e) => setEditInsName(e.target.value)} className="pos-field w-full px-2 py-1.5 text-sm rounded" />
+                        <div className="flex gap-2">
+                          <select value={editInsUnit} onChange={(e) => setEditInsUnit(e.target.value)} className="pos-field flex-1 min-w-0 px-2 py-1.5 text-sm rounded">
+                            {UNIT_OPTIONS.map((u) => <option key={u.id} value={u.id}>{u.label}</option>)}
+                          </select>
+                          <input value={editInsStock} onChange={(e) => setEditInsStock(e.target.value.replace(/[^0-9.]/g, ""))} className="pos-field w-28 px-2 py-1.5 text-sm rounded" />
+                        </div>
+                        <div className="flex gap-2 mt-1">
+                          <button
+                            onClick={() => { editInsumo(i.id, editInsName, editInsUnit, editInsStock); setEditingInsId(null); }}
+                            className="flex-1 py-1.5 rounded text-sm font-semibold flex items-center justify-center gap-1" style={{ background: C.gold, color: "#FFFFFF" }}
+                          >
+                            <Check size={14} /> Guardar
+                          </button>
+                          <button onClick={() => setEditingInsId(null)} className="flex-1 py-1.5 rounded text-sm font-semibold" style={{ background: "#FFFFFF", color: C.ink, border: `1px solid ${C.border}` }}>
+                            Cancelar
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="text-sm" style={{ color: C.ink }}>{i.name}</div>
+                          <div className="text-xs" style={{ color: C.inkDim }}>Stock: {i.stock} {i.unit} · {unitLabel(i.unit)}</div>
+                        </div>
+                        <div className="flex gap-3 shrink-0 ml-2">
+                          <button onClick={() => startEditInsumo(i)} style={{ color: C.inkDim }}><Pencil size={14} /></button>
+                          <button onClick={() => deleteInsumo(i.id)} style={{ color: C.danger }}><Trash2 size={14} /></button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </Card>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
