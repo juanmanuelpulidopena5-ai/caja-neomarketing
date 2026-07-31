@@ -35,9 +35,33 @@ const METHODS = [
   { id: "daviplata", label: "Daviplata", color: "#8A8A8A" },
   { id: "tarjeta", label: "Tarjeta", color: "#404040" },
   { id: "transferencia", label: "Transferencia", color: "#A3A3A3" },
+  { id: "mixto", label: "Dividido", color: "#737373" },
 ];
 const methodColor = (id) => METHODS.find((m) => m.id === id)?.color || "#999";
 const methodLabel = (id) => METHODS.find((m) => m.id === id)?.label || id;
+
+/* Métodos que sí son categorías de totalización en los reportes ("Dividido" no lo es:
+   sus montos se reparten en sus métodos reales vía split_payments). */
+const REPORT_METHODS = METHODS.filter((m) => m.id !== "mixto");
+const methodIdFromLabel = (label) => METHODS.find((m) => m.label === label)?.id || label;
+
+/* Suma el total de cada venta a su método de pago. Si el método es "mixto",
+   reparte el monto según cada entrada de sale.splitPayments en su método real. */
+const computeMethodTotals = (salesList) => {
+  const totals = {};
+  REPORT_METHODS.forEach((m) => (totals[m.id] = 0));
+  salesList.forEach((s) => {
+    if (s.method === "mixto") {
+      (s.splitPayments || []).forEach((sp) => {
+        const id = methodIdFromLabel(sp.metodo);
+        totals[id] = (totals[id] || 0) + Number(sp.monto || 0);
+      });
+    } else {
+      totals[s.method] = (totals[s.method] || 0) + s.total;
+    }
+  });
+  return totals;
+};
 
 /* Unidades de medida disponibles para insumos/materia prima. */
 const UNIT_OPTIONS = [
@@ -276,6 +300,44 @@ function LoginScreen() {
 }
  
 /* ================= APP PRINCIPAL (con sesión activa) ================= */
+/* ================= INICIO DE TURNO (selección de trabajador) ================= */
+function WorkerGate({ workers, onSelect, onSkip }) {
+  return (
+    <div style={{ background: C.bg, minHeight: "100vh", fontFamily: "Inter, sans-serif" }} className="flex items-center justify-center px-5">
+      <div className="w-full rounded-md p-6" style={{ background: C.paper, border: `1px solid ${C.border}`, maxWidth: 420, boxSizing: "border-box" }}>
+        <div className="flex items-center gap-2 justify-center mb-2">
+          <Coffee size={20} color={C.ink} strokeWidth={1.5} />
+          <span style={{ color: C.ink, fontFamily: "'Inter', sans-serif", fontWeight: 600 }} className="text-base">NeoMarketing</span>
+        </div>
+        <p className="text-center text-sm mb-5" style={{ color: C.inkDim }}>¿Quién está iniciando turno en la caja?</p>
+
+        {workers.length === 0 ? (
+          <p className="text-sm text-center" style={{ color: C.inkDim }}>
+            Aún no hay trabajadores activos. Crea uno en la pestaña "Productos → Trabajadores".
+          </p>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {workers.map((w) => (
+              <button
+                key={w.id}
+                onClick={() => onSelect(w.name)}
+                className="w-full py-3 rounded-md font-semibold text-sm"
+                style={{ background: C.gold, color: "#FFFFFF" }}
+              >
+                {w.name}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <button onClick={onSkip} className="w-full mt-4 text-xs underline text-center" style={{ color: C.inkDim }}>
+          Continuar sin registrar trabajador
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function CajaApp({ session }) {
   const userId = session.user.id;
  
@@ -287,10 +349,26 @@ function CajaApp({ session }) {
   const [withdrawals, setWithdrawals] = useState([]);
   const [insumos, setInsumos] = useState([]);       // insumos / materia prima
   const [categories, setCategories] = useState([]); // categorías con receta base opcional
+  const [workers, setWorkers] = useState([]);       // trabajadores del negocio
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [tab, setTab] = useState("vender");
   const [ticket, setTicket] = useState(null); // venta que se está imprimiendo
+
+  /* ---------- turno / trabajador activo (persistido en localStorage) ---------- */
+  const [workerName, setWorkerNameState] = useState(() => {
+    try { return localStorage.getItem("pos_worker_name") || null; } catch { return null; }
+  });
+  const [skipWorkerGate, setSkipWorkerGate] = useState(false); // "continuar sin registrar" (solo esta sesión)
+
+  const setWorkerName = (name) => {
+    setWorkerNameState(name);
+    try {
+      if (name) localStorage.setItem("pos_worker_name", name);
+      else localStorage.removeItem("pos_worker_name");
+    } catch { /* localStorage no disponible: el turno solo dura la sesión */ }
+  };
+  const endShift = () => setWorkerName(null);
 
   const printSale = (sale) => setTicket(sale);
   useEffect(() => {
@@ -301,7 +379,7 @@ function CajaApp({ session }) {
 
   const loadAll = useCallback(async () => {
     try {
-      const [p, t, s, pe, cb, wd, ins, cat] = await Promise.all([
+      const [p, t, s, pe, cb, wd, ins, cat, wk] = await Promise.all([
         supabase.from("products").select("*").eq("user_id", userId),
         supabase.from("tables_config").select("*").eq("user_id", userId),
         supabase.from("sales").select("*").eq("user_id", userId),
@@ -310,6 +388,7 @@ function CajaApp({ session }) {
         supabase.from("cash_withdrawals").select("*").eq("user_id", userId),
         supabase.from("insumos").select("*").eq("user_id", userId),
         supabase.from("categories").select("*").eq("user_id", userId),
+        supabase.from("workers").select("*").eq("user_id", userId),
       ]);
  
       if (p.error) throw p.error;
@@ -320,6 +399,7 @@ function CajaApp({ session }) {
       if (wd.error) throw wd.error;
       if (ins.error) throw ins.error;
       if (cat.error) throw cat.error;
+      if (wk.error) throw wk.error;
  
       setProducts((p.data || []).map((r) => ({
         id: r.id,
@@ -345,6 +425,8 @@ function CajaApp({ session }) {
         cashReceived: r.cash_received != null ? Number(r.cash_received) : null,
         change: r.change != null ? Number(r.change) : null,
         anulada: !!r.anulada,
+        workerName: r.worker_name || null,
+        splitPayments: r.split_payments || [],
       })));
       setPending((pe.data || []).map((r) => ({
         id: r.id,
@@ -352,6 +434,12 @@ function CajaApp({ session }) {
         tableName: r.table_name,
         cart: r.cart,
         method: r.method,
+        workerName: r.worker_name || null,
+        // "paused" (mesa pausada normal) o "debt" (cuenta por cobrar / fiado)
+        status: r.status || "paused",
+        customerName: r.customer_name || null,
+        totalAmount: r.total_amount != null ? Number(r.total_amount) : 0,
+        paidAmount: r.paid_amount != null ? Number(r.paid_amount) : 0,
         createdAt: new Date(r.created_at).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" }),
       })));
       setCashBases((cb.data || []).map((r) => ({ id: r.id, date: r.date, amount: Number(r.amount) })));
@@ -364,6 +452,7 @@ function CajaApp({ session }) {
       setCategories((cat.data || []).map((r) => ({
         id: r.id, name: r.name, defaultRecipe: r.default_recipe || [],
       })));
+      setWorkers((wk.data || []).map((r) => ({ id: r.id, name: r.name, active: !!r.active })));
  
       setError("");
     } catch (e) {
@@ -376,6 +465,21 @@ function CajaApp({ session }) {
  
   useEffect(() => { loadAll(); }, [loadAll]);
  
+  /* ---------- trabajadores ---------- */
+  const addWorker = async (name) => {
+    if (!name.trim()) return;
+    const { error: e } = await supabase.from("workers").insert({ user_id: userId, name: name.trim(), active: true });
+    if (e) setError("No se pudo guardar el trabajador."); else loadAll();
+  };
+  const toggleWorkerActive = async (id, active) => {
+    const { error: e } = await supabase.from("workers").update({ active }).eq("id", id);
+    if (e) setError("No se pudo actualizar el trabajador."); else loadAll();
+  };
+  const deleteWorker = async (id) => {
+    const { error: e } = await supabase.from("workers").delete().eq("id", id);
+    if (e) setError("No se pudo eliminar el trabajador."); else loadAll();
+  };
+
   /* ---------- productos ---------- */
   const addProduct = async (name, price, opts = {}) => {
     if (!name.trim() || !price) return;
@@ -463,6 +567,7 @@ function CajaApp({ session }) {
   const [customPrice, setCustomPrice] = useState("");
   const [cashReceived, setCashReceived] = useState("");
   const [saleMsg, setSaleMsg] = useState("");
+  const [splitPayments, setSplitPayments] = useState([]); // pagos mixtos: [{ metodo, monto }]
  
   const addToCart = (item, qty = 1) => {
     const addQty = Math.max(1, Math.round(Number(qty) || 1));
@@ -479,6 +584,13 @@ function CajaApp({ session }) {
   const registerSale = async () => {
     if (cart.length === 0) { setSaleMsg("Agrega al menos un producto."); return; }
     if (!method) { setSaleMsg("Selecciona cómo pagaron."); return; }
+    const isSplit = method === "mixto";
+    const validSplits = splitPayments.filter((sp) => sp.metodo && Number(sp.monto) > 0);
+    if (isSplit) {
+      if (validSplits.length === 0) { setSaleMsg("Agrega al menos un pago."); return; }
+      const splitSum = validSplits.reduce((s, sp) => s + Number(sp.monto), 0);
+      if (splitSum !== cartTotal) { setSaleMsg(`Los pagos deben sumar ${fmt(cartTotal)} (llevas ${fmt(splitSum)}).`); return; }
+    }
     const now = new Date();
     const tableObj = tables.find((t) => t.id === selectedTable);
     const received = cashReceived !== "" ? Number(cashReceived) : null;
@@ -494,10 +606,12 @@ function CajaApp({ session }) {
       table_name: tableObj ? tableObj.name : null,
       cash_received: received,
       change: changeDue,
+      worker_name: workerName || null,
+      split_payments: isSplit ? validSplits : [],
     });
     if (e) { setSaleMsg("No se pudo registrar la venta."); return; }
     await applyInventoryDeductions(cart);
-    setCart([]); setMethod(null); setSelectedTable(null); setCashReceived("");
+    setCart([]); setMethod(null); setSelectedTable(null); setCashReceived(""); setSplitPayments([]);
     setSaleMsg("Venta registrada ✓");
     setTimeout(() => setSaleMsg(""), 2000);
     loadAll();
@@ -555,9 +669,11 @@ function CajaApp({ session }) {
       table_name: tableObj ? tableObj.name : null,
       cart,
       method,
+      worker_name: workerName || null,
+      status: "paused",
     });
     if (e) { setSaleMsg("No se pudo pausar la venta."); return; }
-    setCart([]); setMethod(null); setSelectedTable(null); setCashReceived("");
+    setCart([]); setMethod(null); setSelectedTable(null); setCashReceived(""); setSplitPayments([]);
     setSaleMsg("Venta pausada ✓");
     setTimeout(() => setSaleMsg(""), 2000);
     loadAll();
@@ -579,6 +695,29 @@ function CajaApp({ session }) {
   const deletePending = async (id) => {
     const { error: e } = await supabase.from("pending_sales").delete().eq("id", id);
     if (!e) loadAll();
+  };
+
+  /* ---------- cuentas por cobrar (fiados) ---------- */
+  const createDebt = async (customerName, totalAmount, paidAmount) => {
+    if (!customerName.trim() || !totalAmount) return;
+    const { error: e } = await supabase.from("pending_sales").insert({
+      user_id: userId,
+      status: "debt",
+      customer_name: customerName.trim(),
+      total_amount: Number(totalAmount),
+      paid_amount: Number(paidAmount || 0),
+      worker_name: workerName || null,
+      cart: [],
+      method: null,
+    });
+    if (e) setError("No se pudo guardar la cuenta por cobrar."); else loadAll();
+  };
+  const addAbono = async (id, amount) => {
+    const entry = pending.find((p) => p.id === id);
+    if (!entry || !amount || Number(amount) <= 0) return;
+    const newPaid = Number(entry.paidAmount || 0) + Number(amount);
+    const { error: e } = await supabase.from("pending_sales").update({ paid_amount: newPaid }).eq("id", id);
+    if (e) setError("No se pudo registrar el abono."); else loadAll();
   };
  
   /* ---------- base de caja y retiros ---------- */
@@ -613,11 +752,7 @@ function CajaApp({ session }) {
   const [selDate, setSelDate] = useState(toISO(new Date()));
   const daySales = useMemo(() => sales.filter((s) => s.date === selDate), [sales, selDate]);
   const dayActiveSales = useMemo(() => daySales.filter((s) => !s.anulada), [daySales]);
-  const dayByMethod = useMemo(() => {
-    const m = {}; METHODS.forEach((mm) => (m[mm.id] = 0));
-    dayActiveSales.forEach((s) => (m[s.method] = (m[s.method] || 0) + s.total));
-    return m;
-  }, [dayActiveSales]);
+  const dayByMethod = useMemo(() => computeMethodTotals(dayActiveSales), [dayActiveSales]);
   const dayTotal = dayActiveSales.reduce((s, x) => s + x.total, 0);
  
   /* ---------- progreso semana / mes ---------- */
@@ -632,11 +767,10 @@ function CajaApp({ session }) {
     }), [weekDays, sales]
   );
   const weekTotal = weekChart.reduce((s, d) => s + d.total, 0);
-  const weekByMethod = useMemo(() => {
-    const m = {}; METHODS.forEach((mm) => (m[mm.id] = 0));
-    sales.filter((s) => weekChart.some((d) => d.iso === s.date) && !s.anulada).forEach((s) => (m[s.method] = (m[s.method] || 0) + s.total));
-    return m;
-  }, [sales, weekChart]);
+  const weekByMethod = useMemo(
+    () => computeMethodTotals(sales.filter((s) => weekChart.some((d) => d.iso === s.date) && !s.anulada)),
+    [sales, weekChart]
+  );
  
   const [monthCursor, setMonthCursor] = useState({ y: new Date().getFullYear(), m: new Date().getMonth() });
   const monthWeeks = useMemo(() => {
@@ -654,13 +788,10 @@ function CajaApp({ session }) {
     });
   }, [monthCursor, sales]);
   const monthTotal = monthWeeks.reduce((s, w) => s + w.total, 0);
-  const monthByMethod = useMemo(() => {
-    const m = {}; METHODS.forEach((mm) => (m[mm.id] = 0));
-    sales
-      .filter((s) => { const d = parseISO(s.date); return !s.anulada && d.getFullYear() === monthCursor.y && d.getMonth() === monthCursor.m; })
-      .forEach((s) => (m[s.method] = (m[s.method] || 0) + s.total));
-    return m;
-  }, [sales, monthCursor]);
+  const monthByMethod = useMemo(
+    () => computeMethodTotals(sales.filter((s) => { const d = parseISO(s.date); return !s.anulada && d.getFullYear() === monthCursor.y && d.getMonth() === monthCursor.m; })),
+    [sales, monthCursor]
+  );
  
   const pendingCount = pending.length;
   const TABS = [
@@ -676,6 +807,16 @@ function CajaApp({ session }) {
       <div style={{ background: C.bg, minHeight: "100vh" }} className="flex items-center justify-center">
         <span style={{ color: C.goldDark, fontFamily: "'Inter', sans-serif" }}>Cargando caja…</span>
       </div>
+    );
+  }
+
+  if (!workerName && !skipWorkerGate) {
+    return (
+      <WorkerGate
+        workers={workers.filter((w) => w.active)}
+        onSelect={setWorkerName}
+        onSkip={() => setSkipWorkerGate(true)}
+      />
     );
   }
  
@@ -726,6 +867,14 @@ function CajaApp({ session }) {
             <LogOut size={15} strokeWidth={1.5} /> Cerrar sesión
           </button>
         </div>
+        {workerName && (
+          <div style={containerStyle({ paddingBottom: 10 })} className="flex items-center justify-between">
+            <span className="text-xs" style={{ color: C.inkDim }}>
+              Turno: <span style={{ color: C.ink, fontWeight: 600 }}>{workerName}</span>
+            </span>
+            <button onClick={endShift} className="text-xs underline" style={{ color: C.inkDim }}>Cambiar</button>
+          </div>
+        )}
       </div>
  
       {/* pestañas de navegación */}
@@ -782,10 +931,11 @@ function CajaApp({ session }) {
             tables={tables} selectedTable={selectedTable} setSelectedTable={setSelectedTable}
             cashReceived={cashReceived} setCashReceived={setCashReceived}
             pauseSale={pauseSale}
+            splitPayments={splitPayments} setSplitPayments={setSplitPayments}
           />
         )}
         {tab === "pausadas" && (
-          <PausadasTab pending={pending} resumePending={resumePending} deletePending={deletePending} />
+          <PausadasTab pending={pending} resumePending={resumePending} deletePending={deletePending} createDebt={createDebt} addAbono={addAbono} />
         )}
         {tab === "caja" && (
           <CajaTab
@@ -809,6 +959,7 @@ function CajaApp({ session }) {
             tables={tables} addTable={addTable} editTable={editTable} deleteTable={deleteTable}
             insumos={insumos} addInsumo={addInsumo} editInsumo={editInsumo} deleteInsumo={deleteInsumo}
             categories={categories} addCategory={addCategory} editCategory={editCategory} deleteCategory={deleteCategory}
+            workers={workers} addWorker={addWorker} toggleWorkerActive={toggleWorkerActive} deleteWorker={deleteWorker}
           />
         )}
         </div>
@@ -823,6 +974,7 @@ function VenderTab({
   products, cart, addToCart, decFromCart, removeFromCart, cartTotal, method, setMethod,
   customName, setCustomName, customPrice, setCustomPrice, registerSale, saleMsg,
   tables, selectedTable, setSelectedTable, cashReceived, setCashReceived, pauseSale,
+  splitPayments, setSplitPayments,
 }) {
   const [query, setQuery] = useState("");
   const [modalProduct, setModalProduct] = useState(null); // producto pendiente de confirmar cantidad
@@ -945,6 +1097,13 @@ function VenderTab({
             </div>
           </Card>
 
+          {method === "mixto" && (
+            <Card>
+              <SectionLabel>Dividir pago</SectionLabel>
+              <SplitPaymentBuilder splitPayments={splitPayments} setSplitPayments={setSplitPayments} cartTotal={cartTotal} />
+            </Card>
+          )}
+
           <Card>
             <SectionLabel>Pago recibido</SectionLabel>
             <input placeholder="¿Cuánto dio el cliente?" inputMode="numeric" value={cashReceived}
@@ -1056,40 +1215,196 @@ function QuantityModal({ product, onConfirm, onClose }) {
   );
 }
  
-/* ================= PAUSADAS ================= */
-function PausadasTab({ pending, resumePending, deletePending }) {
+/* Constructor de pagos mixtos: arma un arreglo [{ metodo, monto }] para la columna split_payments. */
+const SPLIT_METHOD_OPTIONS = METHODS.filter((m) => m.id !== "mixto").map((m) => m.label);
+
+function SplitPaymentBuilder({ splitPayments, setSplitPayments, cartTotal }) {
+  const addRow = () => setSplitPayments([...splitPayments, { metodo: SPLIT_METHOD_OPTIONS[0], monto: "" }]);
+  const updateRow = (idx, patch) => {
+    const copy = splitPayments.slice();
+    copy[idx] = { ...copy[idx], ...patch };
+    setSplitPayments(copy);
+  };
+  const removeRow = (idx) => setSplitPayments(splitPayments.filter((_, i) => i !== idx));
+
+  const sum = splitPayments.reduce((s, sp) => s + (Number(sp.monto) || 0), 0);
+  const diff = cartTotal - sum;
+
   return (
-    <div className="flex flex-col gap-4">
-      <SectionLabel>Ventas en espera</SectionLabel>
-      {pending.length === 0 && (
-        <p className="text-sm" style={{ color: C.inkDim }}>No hay ventas pausadas. Desde "Vender" puedes usar el botón "Pausar".</p>
-      )}
-      <div className="flex flex-col gap-3">
-        {pending.map((p) => (
-          <Card key={p.id}>
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <div className="text-xs flex items-center gap-1" style={{ color: C.inkDim }}>
-                  <Clock size={11} /> {p.createdAt} · {p.tableName || "Sin mesa"}
-                </div>
-                <div className="text-sm mt-1" style={{ color: C.ink }}>
-                  {p.cart.map((i) => `${i.name} x${i.qty}`).join(", ")}
-                </div>
-                <div className="text-sm mt-1 font-semibold" style={{ color: C.goldDark, fontFamily: "'Inter', sans-serif" }}>
-                  {fmt(p.cart.reduce((s, i) => s + i.price * i.qty, 0))}
-                </div>
-              </div>
-              <div className="flex flex-col gap-2 items-end shrink-0">
-                <button onClick={() => resumePending(p.id)} className="flex items-center gap-1 px-3 py-1.5 text-xs rounded font-semibold" style={{ background: C.gold, color: "#FFFFFF" }}>
-                  <PlayCircle size={12} /> Retomar
-                </button>
-                <button onClick={() => deletePending(p.id)} style={{ color: C.danger }}><Trash2 size={14} /></button>
-              </div>
-            </div>
-          </Card>
-        ))}
+    <div className="flex flex-col gap-2 mt-2">
+      {splitPayments.length === 0 && <p className="text-xs" style={{ color: C.inkDim }}>Agrega los pagos que componen el total.</p>}
+      {splitPayments.map((row, idx) => (
+        <div key={idx} className="flex items-center gap-2">
+          <select
+            value={row.metodo}
+            onChange={(e) => updateRow(idx, { metodo: e.target.value })}
+            className="pos-field flex-1 min-w-0 px-2 py-1.5 text-sm rounded"
+          >
+            {SPLIT_METHOD_OPTIONS.map((label) => <option key={label} value={label}>{label}</option>)}
+          </select>
+          <input
+            inputMode="numeric"
+            placeholder="Valor"
+            value={row.monto}
+            onChange={(e) => updateRow(idx, { monto: e.target.value.replace(/\D/g, "") })}
+            className="pos-field w-28 px-2 py-1.5 text-sm rounded"
+          />
+          <button type="button" onClick={() => removeRow(idx)} style={{ color: C.danger }}><X size={14} /></button>
+        </div>
+      ))}
+
+      <button type="button" onClick={addRow} className="self-start text-xs font-semibold flex items-center gap-1 mt-1" style={{ color: C.goldDark }}>
+        <Plus size={12} /> Agregar pago
+      </button>
+
+      <div className="flex items-center justify-between text-sm mt-1 pt-2" style={{ borderTop: `1px solid ${C.border}` }}>
+        <span style={{ color: C.inkDim }}>Asignado: {fmt(sum)} de {fmt(cartTotal)}</span>
+        {diff !== 0 && (
+          <span className="font-semibold" style={{ color: C.danger }}>
+            {diff > 0 ? `Falta ${fmt(diff)}` : `Sobra ${fmt(Math.abs(diff))}`}
+          </span>
+        )}
       </div>
     </div>
+  );
+}
+
+/* ================= PAUSADAS ================= */
+function PausadasTab({ pending, resumePending, deletePending, createDebt, addAbono }) {
+  const [section, setSection] = useState("mesas"); // "mesas" | "deudas"
+  const mesas = useMemo(() => pending.filter((p) => p.status !== "debt"), [pending]);
+  const deudas = useMemo(() => pending.filter((p) => p.status === "debt"), [pending]);
+
+  const [customerName, setCustomerName] = useState("");
+  const [totalAmount, setTotalAmount] = useState("");
+  const [paidAmount, setPaidAmount] = useState("");
+
+  const submitDebt = () => {
+    if (!customerName.trim() || !totalAmount) return;
+    createDebt(customerName, totalAmount, paidAmount);
+    setCustomerName(""); setTotalAmount(""); setPaidAmount("");
+  };
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="grid grid-cols-2 gap-2">
+        <KeyBtn active={section === "mesas"} onClick={() => setSection("mesas")} style={{ padding: "8px" }}>
+          Mesas {mesas.length > 0 && `(${mesas.length})`}
+        </KeyBtn>
+        <KeyBtn active={section === "deudas"} onClick={() => setSection("deudas")} style={{ padding: "8px" }}>
+          Cuentas por cobrar {deudas.length > 0 && `(${deudas.length})`}
+        </KeyBtn>
+      </div>
+
+      {section === "mesas" && (
+        <div className="flex flex-col gap-3">
+          <SectionLabel>Ventas en espera</SectionLabel>
+          {mesas.length === 0 && (
+            <p className="text-sm" style={{ color: C.inkDim }}>No hay ventas pausadas. Desde "Vender" puedes usar el botón "Pausar".</p>
+          )}
+          {mesas.map((p) => (
+            <Card key={p.id}>
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-xs flex items-center gap-1" style={{ color: C.inkDim }}>
+                    <Clock size={11} /> {p.createdAt} · {p.tableName || "Sin mesa"}
+                    {p.workerName && ` · ${p.workerName}`}
+                  </div>
+                  <div className="text-sm mt-1" style={{ color: C.ink }}>
+                    {p.cart.map((i) => `${i.name} x${i.qty}`).join(", ")}
+                  </div>
+                  <div className="text-sm mt-1 font-semibold" style={{ color: C.goldDark, fontFamily: "'Inter', sans-serif" }}>
+                    {fmt(p.cart.reduce((s, i) => s + i.price * i.qty, 0))}
+                  </div>
+                </div>
+                <div className="flex flex-col gap-2 items-end shrink-0">
+                  <button onClick={() => resumePending(p.id)} className="flex items-center gap-1 px-3 py-1.5 text-xs rounded font-semibold" style={{ background: C.gold, color: "#FFFFFF" }}>
+                    <PlayCircle size={12} /> Retomar
+                  </button>
+                  <button onClick={() => deletePending(p.id)} style={{ color: C.danger }}><Trash2 size={14} /></button>
+                </div>
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {section === "deudas" && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 24 }}>
+          <div style={{ flex: "1 1 300px", minWidth: 0 }}>
+            <Card>
+              <SectionLabel>Nueva cuenta por cobrar</SectionLabel>
+              <div className="flex flex-col gap-2 mt-2">
+                <input placeholder="Nombre del cliente" value={customerName} onChange={(e) => setCustomerName(e.target.value)}
+                  className="pos-field w-full px-2 py-2 text-sm rounded" />
+                <div className="flex gap-2">
+                  <input placeholder="Total de la cuenta" inputMode="numeric" value={totalAmount}
+                    onChange={(e) => setTotalAmount(e.target.value.replace(/\D/g, ""))}
+                    className="pos-field flex-1 min-w-0 px-2 py-2 text-sm rounded" />
+                  <input placeholder="Abono inicial" inputMode="numeric" value={paidAmount}
+                    onChange={(e) => setPaidAmount(e.target.value.replace(/\D/g, ""))}
+                    className="pos-field flex-1 min-w-0 px-2 py-2 text-sm rounded" />
+                </div>
+              </div>
+              <button onClick={submitDebt} className="w-full mt-3 py-2 rounded font-semibold flex items-center justify-center gap-1" style={{ background: C.gold, color: "#FFFFFF" }}>
+                <Plus size={16} /> Guardar cuenta por cobrar
+              </button>
+            </Card>
+          </div>
+
+          <div style={{ flex: "1 1 300px", minWidth: 0 }} className="flex flex-col gap-3">
+            <SectionLabel>Cuentas por cobrar</SectionLabel>
+            {deudas.length === 0 && <p className="text-sm" style={{ color: C.inkDim }}>No hay cuentas por cobrar activas.</p>}
+            {deudas.map((d) => (
+              <DebtCard key={d.id} debt={d} addAbono={addAbono} deletePending={deletePending} />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* Tarjeta de una cuenta por cobrar individual, con su propio campo de abono. */
+function DebtCard({ debt, addAbono, deletePending }) {
+  const [abono, setAbono] = useState("");
+  const remaining = Math.max(0, debt.totalAmount - debt.paidAmount);
+  const paidOff = remaining <= 0;
+
+  const submitAbono = () => {
+    if (!abono) return;
+    addAbono(debt.id, abono);
+    setAbono("");
+  };
+
+  return (
+    <Card>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="text-xs flex items-center gap-1" style={{ color: C.inkDim }}>
+            <Clock size={11} /> {debt.createdAt}{debt.workerName && ` · ${debt.workerName}`}
+          </div>
+          <div className="text-sm mt-1 font-semibold" style={{ color: C.ink }}>{debt.customerName}</div>
+          <div className="text-xs mt-1" style={{ color: C.inkDim }}>
+            Total: {fmt(debt.totalAmount)} · Abonado: {fmt(debt.paidAmount)}
+          </div>
+          <div className="text-sm mt-1 font-semibold" style={{ color: paidOff ? C.goldDark : C.danger, fontFamily: "'Inter', sans-serif" }}>
+            {paidOff ? "Pagada ✓" : `Saldo: ${fmt(remaining)}`}
+          </div>
+        </div>
+        <button onClick={() => deletePending(debt.id)} style={{ color: C.danger }} className="shrink-0"><Trash2 size={14} /></button>
+      </div>
+
+      {!paidOff && (
+        <div className="flex gap-2 mt-3">
+          <input placeholder="Nuevo abono" inputMode="numeric" value={abono} onChange={(e) => setAbono(e.target.value.replace(/\D/g, ""))}
+            className="pos-field flex-1 min-w-0 px-2 py-1.5 text-sm rounded" />
+          <button onClick={submitAbono} className="px-3 rounded text-sm font-semibold" style={{ background: C.gold, color: "#FFFFFF" }}>
+            Abonar
+          </button>
+        </div>
+      )}
+    </Card>
   );
 }
  
@@ -1106,6 +1421,12 @@ function CajaTab({
   const [baseInput, setBaseInput] = useState(dayBase ? String(dayBase) : "");
   const [wDesc, setWDesc] = useState("");
   const [wAmount, setWAmount] = useState("");
+  const [methodFilter, setMethodFilter] = useState("todas");
+
+  const filteredDaySales = useMemo(
+    () => (methodFilter === "todas" ? daySales : daySales.filter((s) => s.method === methodFilter)),
+    [daySales, methodFilter]
+  );
  
   useEffect(() => {
     setBaseInput(dayBase ? String(dayBase) : "");
@@ -1143,7 +1464,7 @@ function CajaTab({
       </Card>
  
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12 }}>
-        {METHODS.map((m) => <VFD key={m.id} label={m.label} value={dayByMethod[m.id] || 0} small />)}
+        {REPORT_METHODS.map((m) => <VFD key={m.id} label={m.label} value={dayByMethod[m.id] || 0} small />)}
       </div>
       <VFD label="Total del día" value={dayTotal} tone="accent" />
  
@@ -1182,14 +1503,21 @@ function CajaTab({
  
       <Card>
         <SectionLabel>Transacciones</SectionLabel>
+        <div className="flex flex-wrap gap-2 mt-2">
+          <KeyBtn active={methodFilter === "todas"} onClick={() => setMethodFilter("todas")} style={{ padding: "6px 12px", fontSize: 12 }}>Todas</KeyBtn>
+          {METHODS.map((m) => (
+            <KeyBtn key={m.id} active={methodFilter === m.id} onClick={() => setMethodFilter(m.id)} style={{ padding: "6px 12px", fontSize: 12 }}>{m.label}</KeyBtn>
+          ))}
+        </div>
         <div className="mt-3 flex flex-col gap-3">
-          {daySales.length === 0 && <p className="text-sm" style={{ color: C.inkDim }}>No hay ventas registradas este día.</p>}
-          {daySales.slice().reverse().map((s) => (
+          {filteredDaySales.length === 0 && <p className="text-sm" style={{ color: C.inkDim }}>No hay ventas para este filtro.</p>}
+          {filteredDaySales.slice().reverse().map((s) => (
             <div key={s.id} className="flex justify-between items-start pb-3" style={{ borderBottom: `1px solid ${C.border}`, opacity: s.anulada ? 0.55 : 1 }}>
               <div>
                 <div className="text-xs" style={{ color: C.inkDim }}>
                   {s.time} · <span style={{ color: methodColor(s.method) }}>{methodLabel(s.method)}</span>
                   {s.tableName ? ` · ${s.tableName}` : ""}
+                  {s.workerName ? ` · ${s.workerName}` : ""}
                   {s.anulada && <span className="ml-2 font-semibold" style={{ color: C.danger }}>· ANULADA</span>}
                 </div>
                 <div className="text-sm mt-1" style={{ color: s.anulada ? C.inkDim : C.ink, textDecoration: s.anulada ? "line-through" : "none" }}>
@@ -1463,7 +1791,7 @@ function MethodBreakdown({ byMethod }) {
     <div>
       <SectionLabel>Por método de pago</SectionLabel>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 12, marginTop: 8 }}>
-        {METHODS.map((m) => <VFD key={m.id} label={m.label} value={byMethod[m.id] || 0} small />)}
+        {REPORT_METHODS.map((m) => <VFD key={m.id} label={m.label} value={byMethod[m.id] || 0} small />)}
       </div>
     </div>
   );
@@ -1604,8 +1932,9 @@ function ProductosTab({
   products, addProduct, editProduct, deleteProduct, tables, addTable, editTable, deleteTable,
   insumos, addInsumo, editInsumo, deleteInsumo,
   categories, addCategory, editCategory, deleteCategory,
+  workers, addWorker, toggleWorkerActive, deleteWorker,
 }) {
-  const [section, setSection] = useState("productos"); // "productos" | "categorias" | "insumos"
+  const [section, setSection] = useState("productos"); // "productos" | "categorias" | "insumos" | "trabajadores"
 
   /* --- nuevo producto --- */
   const [name, setName] = useState("");
@@ -1692,12 +2021,16 @@ function ProductosTab({
     setEditingInsId(i.id); setEditInsName(i.name); setEditInsUnit(i.unit); setEditInsStock(String(i.stock));
   };
 
+  /* --- trabajadores --- */
+  const [workerNameInput, setWorkerNameInput] = useState("");
+
   return (
     <div className="flex flex-col gap-5">
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-4 gap-2">
         <KeyBtn active={section === "productos"} onClick={() => setSection("productos")} style={{ padding: "8px" }}>Productos</KeyBtn>
         <KeyBtn active={section === "categorias"} onClick={() => setSection("categorias")} style={{ padding: "8px" }}>Categorías</KeyBtn>
         <KeyBtn active={section === "insumos"} onClick={() => setSection("insumos")} style={{ padding: "8px" }}>Insumos</KeyBtn>
+        <KeyBtn active={section === "trabajadores"} onClick={() => setSection("trabajadores")} style={{ padding: "8px" }}>Trabajadores</KeyBtn>
       </div>
 
       {section === "productos" && (
@@ -1821,9 +2154,6 @@ function ProductosTab({
           <div style={{ flex: "1 1 340px", minWidth: 0 }}>
             <Card>
               <SectionLabel>Nueva categoría</SectionLabel>
-              <p className="text-xs mt-1" style={{ color: C.inkDim }}>
-                Define aquí el consumo base de insumos por venta para los productos de esta categoría (ej. "Cafés" → 18g de café en grano). Cada producto puede usarla tal cual o personalizarla.
-              </p>
               <input placeholder="Nombre de la categoría" value={catName} onChange={(e) => setCatName(e.target.value)}
                 className="pos-field w-full mt-3 px-2 py-2 text-sm rounded" />
               <div className="mt-3">
@@ -1896,9 +2226,6 @@ function ProductosTab({
           <div style={{ flex: "1 1 340px", minWidth: 0 }}>
             <Card>
               <SectionLabel>Nuevo insumo</SectionLabel>
-              <p className="text-xs mt-1" style={{ color: C.inkDim }}>
-                Materia prima que se descuenta del stock cuando se vende un producto configurado "Por insumos/receta" (ej. café en grano, leche, tortillas).
-              </p>
               <div className="flex flex-col gap-2 mt-3">
                 <input placeholder="Nombre del insumo" value={insName} onChange={(e) => setInsName(e.target.value)}
                   className="pos-field w-full px-2 py-2 text-sm rounded" />
@@ -1959,6 +2286,53 @@ function ProductosTab({
                         </div>
                       </div>
                     )}
+                  </div>
+                ))}
+              </div>
+            </Card>
+          </div>
+        </div>
+      )}
+
+      {section === "trabajadores" && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 24 }}>
+          <div style={{ flex: "1 1 340px", minWidth: 0 }}>
+            <Card>
+              <SectionLabel>Nuevo trabajador</SectionLabel>
+              <div className="flex gap-2 mt-3">
+                <input placeholder="Nombre del trabajador" value={workerNameInput} onChange={(e) => setWorkerNameInput(e.target.value)}
+                  className="pos-field flex-1 min-w-0 px-2 py-2 text-sm rounded" />
+                <button
+                  onClick={() => { addWorker(workerNameInput); setWorkerNameInput(""); }}
+                  className="px-3 rounded" style={{ background: C.gold, color: "#FFFFFF" }}
+                >
+                  <Plus size={16} />
+                </button>
+              </div>
+            </Card>
+          </div>
+
+          <div style={{ flex: "1 1 340px", minWidth: 0 }}>
+            <Card>
+              <SectionLabel>Trabajadores</SectionLabel>
+              <div className="mt-2 flex flex-col gap-2">
+                {workers.length === 0 && <p className="text-sm" style={{ color: C.inkDim }}>Aún no hay trabajadores registrados.</p>}
+                {workers.map((w, idx) => (
+                  <div key={w.id} className="flex items-center justify-between py-2" style={{ borderBottom: idx < workers.length - 1 ? `1px solid ${C.border}` : "none" }}>
+                    <div>
+                      <div className="text-sm" style={{ color: C.ink }}>{w.name}</div>
+                      <div className="text-xs" style={{ color: w.active ? C.goldDark : C.inkDim }}>{w.active ? "Activo" : "Inactivo"}</div>
+                    </div>
+                    <div className="flex items-center gap-3 shrink-0">
+                      <button
+                        onClick={() => toggleWorkerActive(w.id, !w.active)}
+                        className="text-xs font-semibold px-2 py-1 rounded"
+                        style={{ background: w.active ? C.goldSoft : "#FFFFFF", color: C.ink, border: `1px solid ${C.border}` }}
+                      >
+                        {w.active ? "Desactivar" : "Activar"}
+                      </button>
+                      <button onClick={() => deleteWorker(w.id)} style={{ color: C.danger }}><Trash2 size={14} /></button>
+                    </div>
                   </div>
                 ))}
               </div>
