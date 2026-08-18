@@ -20,7 +20,7 @@ export default function WompiCardCapture({ session, onSuccess }) {
 
     const checkout = new window.WidgetCheckout({
       currency: "COP",
-      amountInCents: 100, // cobro mínimo de validación; el cobro mensual real lo hace el cron
+      amountInCents: 150000, // cobro mínimo de validación; el cobro mensual real lo hace el cron
       reference,
       publicKey: "pub_prod_4wvnJUuB32bQVFJo3O9N8fIyFxrEkzNy",   // ✅ con comillas
       redirectUrl: window.location.href,
