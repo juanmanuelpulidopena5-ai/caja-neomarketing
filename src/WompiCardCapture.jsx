@@ -2,6 +2,18 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "./supabaseClient";
 
+// Función para generar la firma de seguridad requerida por Wompi
+async function generateSignature(reference, amountInCents, currency, integritySecret) {
+  const concatenatedString = `${reference}${amountInCents}${currency}${integritySecret}`;
+  const enocder = new TextEncoder();
+  const data = enocder.encode(concatenatedString);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  
+  return hashHex;
+}
+
 export default function WompiCardCapture({ session, onSuccess }) {
   const [scriptReady, setScriptReady] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -14,15 +26,26 @@ export default function WompiCardCapture({ session, onSuccess }) {
     document.body.appendChild(script);
   }, []);
 
-  const openWidget = () => {
+  // 1. AQUÍ EL CAMBIO: Agregamos "async" antes de los paréntesis
+  const openWidget = async () => {
     setLoading(true);
     const reference = `sub_${session.user.id}_${Date.now()}`;
+    
+    // 2. AQUÍ EL CAMBIO: Extraemos el valor y la moneda en variables
+    const amountInCents = 150000; 
+    const currency = "COP";
+    // Tu código secreto que pusiste en el archivo .env
+    const integritySecret = import.meta.env.VITE_WOMPI_INTEGRITY_SECRET; 
+
+    // 3. AQUÍ EL CAMBIO: Llamamos a la función para encriptar la firma
+    const signature = await generateSignature(reference, amountInCents, currency, integritySecret);
 
     const checkout = new window.WidgetCheckout({
-      currency: "COP",
-      amountInCents: 150000, // cobro mínimo de validación; el cobro mensual real lo hace el cron
-      reference,
-      publicKey: "pub_prod_4wvnJUuB32bQVFJo3O9N8fIyFxrEkzNy",   // ✅ con comillas
+      currency: currency,
+      amountInCents: amountInCents, 
+      reference: reference,
+      publicKey: "pub_prod_4wvnJUuB32bQVFJo3O9N8fIyFxrEkzNy",   // Se queda tu llave
+      signature: signature, // 4. AQUÍ EL CAMBIO: Enviamos la firma a Wompi
       redirectUrl: window.location.href,
       customerData: { email: session.user.email },
     });
