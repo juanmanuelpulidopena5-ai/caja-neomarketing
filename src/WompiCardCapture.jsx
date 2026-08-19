@@ -37,8 +37,8 @@ export default function WompiCardCapture({ session, onSuccess }) {
         currency: CURRENCY,
         amountInCents: VALIDATION_AMOUNT_CENTS,
         reference,
-        publicKey: "pub_prod_4wvnJUuB32bQVFJo3O9N8fIyFxrEkzNy", // pub_test_xxx / pub_prod_xxx
-        signature: data.signature,
+        publicKey: import.meta.env.VITE_WOMPI_PUBLIC_KEY, // pub_test_xxx / pub_prod_xxx
+        signature: { integrity: data.signature }, // Wompi lo documenta como "signature:integrity"
         redirectUrl: window.location.href,
         customerData: { email: session.user.email },
       });

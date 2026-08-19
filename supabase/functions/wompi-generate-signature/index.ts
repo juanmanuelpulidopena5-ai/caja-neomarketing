@@ -9,10 +9,8 @@
 
 const INTEGRITY_SECRET = Deno.env.get("WOMPI_INTEGRITY_SECRET")!;
 
-// Headers de CORS: sin esto, el navegador bloquea la respuesta antes de que
-// tu código en React la pueda leer, aunque la función haya corrido bien.
 const corsHeaders = {
-  "Access-Control-Allow-Origin": "*", // en producción puedes restringirlo a tu dominio exacto
+  "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
@@ -26,14 +24,12 @@ async function sha256Hex(text: string): Promise<string> {
 }
 
 Deno.serve(async (req) => {
-  // El navegador manda esta petición "de prueba" antes del POST real.
-  // Si no la respondemos con los headers de CORS, el POST real nunca sale.
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
 
   try {
-    const { reference, amountInCents, currency } = await req.json();
+    const { reference, amountInCents, currency, debug } = await req.json();
 
     if (!reference || !amountInCents || !currency) {
       return new Response(JSON.stringify({ error: "Faltan parámetros (reference, amountInCents, currency)" }), {
@@ -42,9 +38,22 @@ Deno.serve(async (req) => {
       });
     }
 
-    const signature = await sha256Hex(`${reference}${amountInCents}${currency}${INTEGRITY_SECRET}`);
+    const preimage = `${reference}${amountInCents}${currency}`; // sin el secreto: esto NO es sensible
+    const signature = await sha256Hex(preimage + INTEGRITY_SECRET);
 
-    return new Response(JSON.stringify({ signature }), {
+    const payload: Record<string, unknown> = { signature };
+    if (debug) {
+      // Solo para depurar manualmente: te dice EXACTAMENTE qué texto se concatenó
+      // (sin el secreto) y cuántos caracteres tiene el secreto que está usando la
+      // función ahora mismo, para comparar contra lo que copiaste de Wompi.
+      payload.debug = {
+        preimage,
+        secretLength: INTEGRITY_SECRET?.length || 0,
+        secretPreview: INTEGRITY_SECRET ? `${INTEGRITY_SECRET.slice(0, 4)}…${INTEGRITY_SECRET.slice(-4)}` : null,
+      };
+    }
+
+    return new Response(JSON.stringify(payload), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
