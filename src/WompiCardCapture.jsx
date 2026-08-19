@@ -37,7 +37,7 @@ export default function WompiCardCapture({ session, onSuccess }) {
         currency: CURRENCY,
         amountInCents: VALIDATION_AMOUNT_CENTS,
         reference,
-        publicKey: pub_prod_4wvnJUuB32bQVFJo3O9N8fIyFxrEkzNy, // pub_test_xxx / pub_prod_xxx
+        publicKey: "pub_prod_4wvnJUuB32bQVFJo3O9N8fIyFxrEkzNy", // pub_test_xxx / pub_prod_xxx
         signature: data.signature,
         redirectUrl: window.location.href,
         customerData: { email: session.user.email },
