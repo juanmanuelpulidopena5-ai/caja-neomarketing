@@ -9,6 +9,14 @@
 
 const INTEGRITY_SECRET = Deno.env.get("WOMPI_INTEGRITY_SECRET")!;
 
+// Headers de CORS: sin esto, el navegador bloquea la respuesta antes de que
+// tu código en React la pueda leer, aunque la función haya corrido bien.
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*", // en producción puedes restringirlo a tu dominio exacto
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+
 async function sha256Hex(text: string): Promise<string> {
   const data = new TextEncoder().encode(text);
   const hashBuffer = await crypto.subtle.digest("SHA-256", data);
@@ -18,13 +26,19 @@ async function sha256Hex(text: string): Promise<string> {
 }
 
 Deno.serve(async (req) => {
+  // El navegador manda esta petición "de prueba" antes del POST real.
+  // Si no la respondemos con los headers de CORS, el POST real nunca sale.
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
+
   try {
     const { reference, amountInCents, currency } = await req.json();
 
     if (!reference || !amountInCents || !currency) {
       return new Response(JSON.stringify({ error: "Faltan parámetros (reference, amountInCents, currency)" }), {
         status: 400,
-        headers: { "Content-Type": "application/json" },
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
@@ -32,12 +46,12 @@ Deno.serve(async (req) => {
 
     return new Response(JSON.stringify({ signature }), {
       status: 200,
-      headers: { "Content-Type": "application/json" },
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (e) {
     return new Response(JSON.stringify({ error: "No se pudo generar la firma" }), {
       status: 500,
-      headers: { "Content-Type": "application/json" },
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 });
