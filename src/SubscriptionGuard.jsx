@@ -1,19 +1,27 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "./supabaseClient";
-import WompiCardCapture from "./WompiCardCapture";
+import WompiMonthlyPayment from "./WompiMonthlyPayment";
 
-// "exempt" = cuentas internas/de prueba a las que decides no cobrarles nunca.
-const HAS_ACCESS = ["trial", "active", "exempt"];
+// Acceso si: está exenta, o el trial sigue vigente, o el período pagado
+// (current_period_end) todavía no vence — sin importar el "status" exacto ni
+// el método con que se pagó (tarjeta, Nequi, PSE... el widget los maneja todos).
+function hasAccess(sub) {
+  if (!sub) return false;
+  if (sub.status === "exempt") return true;
+  if (sub.status === "trial" && sub.trial_ends_at && new Date(sub.trial_ends_at) > new Date()) return true;
+  if (sub.current_period_end && new Date(sub.current_period_end) > new Date()) return true;
+  return false;
+}
 
 export default function SubscriptionGuard({ session, children }) {
   const [sub, setSub] = useState(undefined); // undefined = cargando
 
-  const loadSub = () => {
+  const loadSub = useCallback(() => {
     supabase.from("subscriptions").select("*").eq("user_id", session.user.id).single()
       .then(({ data }) => setSub(data || null));
-  };
+  }, [session.user.id]);
 
-  useEffect(() => { loadSub(); }, [session.user.id]);
+  useEffect(() => { loadSub(); }, [loadSub]);
 
   if (sub === undefined) {
     return (
@@ -23,10 +31,7 @@ export default function SubscriptionGuard({ session, children }) {
     );
   }
 
-  const trialExpired = sub?.status === "trial" && new Date(sub.trial_ends_at) < new Date();
-  const blocked = !sub || !HAS_ACCESS.includes(sub.status) || trialExpired;
-
-  if (blocked) {
+  if (!hasAccess(sub)) {
     return <PaywallScreen session={session} sub={sub} onSuccess={loadSub} />;
   }
 
@@ -34,20 +39,20 @@ export default function SubscriptionGuard({ session, children }) {
 }
 
 function PaywallScreen({ session, sub, onSuccess }) {
-  const isPastDue = sub?.status === "past_due";
+  const isRenewal = sub && sub.status !== "trial";
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
       <div className="w-full max-w-md bg-white border border-gray-200 rounded-lg p-6">
         <h2 className="text-lg font-semibold text-gray-900 mb-1">
-          {isPastDue ? "Tu pago no pudo procesarse" : "Activa tu suscripción"}
+          {isRenewal ? "Tu mensualidad venció" : "Activa tu suscripción"}
         </h2>
         <p className="text-sm text-gray-500 mb-5">
-          {isPastDue
-            ? "Actualiza tu método de pago para reactivar el acceso a la caja."
-            : "Registra una tarjeta para empezar (o continuar) tu prueba gratuita de 7 días."}
+          {isRenewal
+            ? "Paga tu mensualidad para volver a tener acceso a la caja."
+            : "Tu prueba gratuita de 7 días terminó. Paga tu primera mensualidad para continuar."}
         </p>
-        <WompiCardCapture session={session} onSuccess={onSuccess} />
+        <WompiMonthlyPayment session={session} sub={sub} onSuccess={onSuccess} />
       </div>
     </div>
   );
